@@ -1,0 +1,30 @@
+# Local implementation notes and prompts
+/.ai/
+/Codex_Smart_Gallery_Prompt.md
+# Project-local toolchain and scratch downloads
+/.tools/
+/.scratch/
+/.gradle-user-home/
+# Android and IDE generated state
+.gradle/
+.kotlin/
+**/build/
+local.properties
+.idea/
+*.iml
+.DS_Store
+captures/
+.externalNativeBuild/
+.cxx/
+# Private runtime/evaluation data and signing material
+/private-evaluation/
+/exports/
+*.db
+*.db-shm
+*.db-wal
+*.log
+*.jks
+*.keystore
+keystore.properties
+*.apk
+*.aab
