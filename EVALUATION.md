@@ -42,3 +42,26 @@ posters, mirrors, small document portraits, animals, scenes, receipts, IDs and t
 The harness outputs aggregate metrics without filenames, OCR text or embeddings. It does not
 measure battery drain or full-library background throughput. Those require an explicitly recorded
 device session with charging, thermal state, interruptions and library size controlled.
+
+## Actual process interruption
+
+On a developer-authorized Android 10+ phone with the matching debug app installed, build the
+instrumentation APK and run the Windows host orchestrator:
+
+```powershell
+.\gradlew.bat assembleDebugAndroidTest
+.\tools\test-process-recovery.ps1 -Adb "$env:ANDROID_HOME/platform-tools/adb.exe" -Serial YOUR_SERIAL -TestApk app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk -LogDirectory .ai/process-recovery
+```
+
+This opt-in check repeats the existing public-domain video fixture into a temporary two-minute
+clip and uses an isolated private database/preferences. It waits for real frame/checkpoint commits,
+adds a manual identity/category correction, verifies the app PID, requests that test process to
+call Android's self-SIGKILL API, then starts a new process. Recovery must find an incomplete running
+checkpoint, preserve the corrections, finish real inference, avoid duplicate records and leave
+the fixture bytes unchanged.
+Only the run's exact newly inserted MediaStore URI and isolated private files are cleaned up.
+The normal instrumentation suite skips this host-dependent test and never signals a process.
+
+The host explicitly starts recovery work. This check does not prove automatic WorkManager/OS
+rescheduling, reboot recovery, charging constraints, airplane-first-launch behavior or Redmi/HyperOS
+acceptance. It does not grant gallery permissions, reset existing app data or use private media.
