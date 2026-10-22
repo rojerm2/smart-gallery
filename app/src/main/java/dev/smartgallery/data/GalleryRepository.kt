@@ -141,7 +141,6 @@ class GalleryRepository(
                 preserveLegacyPeopleDecisions()
                 val generation = settings.generation
                 val token = UUID.randomUUID().toString()
-                val exclusions = dao.exclusionList()
                 val volumes =
                     if (Build.VERSION.SDK_INT >= 29) MediaStore.getExternalVolumeNames(context)
                     else setOf("external")
@@ -166,19 +165,18 @@ class GalleryRepository(
                             context.contentResolver.query(collection, projection, null, null, null)
                                 ?: throw java.io.IOException("Media provider unavailable")
                         cursor.use { c ->
+                            val batch = ArrayList<Media>(100)
+                            suspend fun saveBatch() {
+                                if (batch.isEmpty()) return
+                                reconcileBatch(batch, generation)
+                                batch.clear()
+                            }
                             while (c.moveToNext()) {
                                 val id = "$volume:${if(video) "v" else "i"}:${c.getLong(0)}"
-                                val old = dao.mediaById(id)
                                 val name = c.getString(1) ?: "Media"
                                 val folder = c.getString(6) ?: "Unknown folder"
                                 val modified = c.getLong(4)
-                                val size = c.getLong(5)
-                                val excluded =
-                                    exclusions.any {
-                                        (it.kind == "folder" && it.value == folder) ||
-                                            (it.kind == "media" && it.value == id)
-                                    }
-                                val item =
+                                batch +=
                                     Media(
                                         id,
                                         ContentUris.withAppendedId(collection, c.getLong(0))
@@ -188,37 +186,15 @@ class GalleryRepository(
                                         c.getString(2) ?: if (video) "video/mp4" else "image/jpeg",
                                         c.getLong(3).takeIf { it > 0 } ?: modified * 1000,
                                         modified,
-                                        size,
+                                        c.getLong(5),
                                         if (video) c.getLong(7) else 0,
-                                        old?.hash ?: "",
-                                        true,
-                                        excluded,
-                                        token,
-                                        old?.searchText ?: "$name $folder",
-                                        old?.analyzed ?: false,
-                                        old?.error ?: "",
+                                        scanToken = token,
                                     )
-                                val changed =
-                                    old == null ||
-                                        old.modified != modified ||
-                                        old.size != size ||
-                                        !old.accessible ||
-                                        old.excluded != excluded
-                                gate.withLock {
-                                    db.withTransaction {
-                                        if (settings.generation != generation)
-                                            throw kotlinx.coroutines.CancellationException()
-                                        dao.media(
-                                            item.copy(
-                                                analyzed = if (changed) false else item.analyzed
-                                            )
-                                        )
-                                        if (excluded) purgeDerived(id)
-                                        else if (changed) dao.stage(Stage(id, "0hash"))
-                                    }
-                                }
-                                if (old?.name != name || old.folder != folder) refreshSearch(id)
+                                // One invalidation/commit per bounded batch rather than many
+                                // commits and gallery refreshes for every discovered item.
+                                if (batch.size == 100) saveBatch()
                             }
+                            saveBatch()
                         }
                     } catch (_: SecurityException) {
                         // Media absent from this accessible snapshot is hidden and purged below.
@@ -230,26 +206,84 @@ class GalleryRepository(
                         purgeDerived(id)
                     }
                 }
-                // Incompatible embedding versions are queued for reanalysis, never compared
-                // together.
-                for (item in dao.accessibleMedia()) {
-                    val stage = dao.stageById(item.id, if (item.video) "1video" else "1faces")
-                    val content = if (item.video) null else dao.stageById(item.id, "2content")
-                    val outdated =
-                        stage == null ||
-                            !stage.version.startsWith(FaceEmbedder.VERSION) ||
-                            (if (item.video)
-                                !stage.version.contains(CONTENT_VERSION) ||
-                                    !stage.version.contains(VideoPlan.VERSION)
-                            else content?.version != CONTENT_VERSION)
-                    if (item.hash.isNotBlank() && outdated)
+                // Join stage versions in bounded pages. Unhashed items already have a hash
+                // stage; issuing two suspend queries per item can starve initial discovery.
+                fun outdated(video: Boolean, faces: String?, content: String?) =
+                    faces == null ||
+                        !faces.startsWith(FaceEmbedder.VERSION) ||
+                        (if (video)
+                            !faces.contains(CONTENT_VERSION) || !faces.contains(VideoPlan.VERSION)
+                        else content != CONTENT_VERSION)
+                var afterId = ""
+                while (true) {
+                    val versions = dao.analysisVersions(afterId)
+                    if (versions.isEmpty()) break
+                    afterId = versions.last().mediaId
+                    for (version in versions) {
+                        if (!outdated(version.video, version.faceVersion, version.contentVersion))
+                            continue
                         gate.withLock {
-                            if (
-                                settings.generation == generation &&
-                                    dao.mediaById(item.id)?.excluded == false
-                            )
-                                enqueueAnalysis(item)
+                            db.withTransaction {
+                                if (settings.generation != generation)
+                                    throw kotlinx.coroutines.CancellationException()
+                                val item = dao.mediaById(version.mediaId) ?: return@withTransaction
+                                if (!item.accessible || item.excluded || item.hash.isBlank())
+                                    return@withTransaction
+                                // Recheck a candidate under the gate so a concurrently completed
+                                // stage or an exclusion cannot be overwritten by a stale page.
+                                val faces =
+                                    dao.stageById(item.id, if (item.video) "1video" else "1faces")
+                                val content =
+                                    if (item.video) null else dao.stageById(item.id, "2content")
+                                if (outdated(item.video, faces?.version, content?.version))
+                                    enqueueAnalysis(item)
+                            }
                         }
+                    }
+                }
+            }
+        }
+
+    /** Apply a bounded metadata snapshot without overwriting newer analysis or exclusions. */
+    internal suspend fun reconcileBatch(batch: List<Media>, generation: Long) =
+        gate.withLock {
+            db.withTransaction {
+                if (settings.generation != generation)
+                    throw kotlinx.coroutines.CancellationException()
+                // A user may exclude media after discovery starts but before this batch commits.
+                val exclusions = dao.exclusionList()
+                for (snapshot in batch) {
+                    val old = dao.mediaById(snapshot.id)
+                    val excluded =
+                        exclusions.any {
+                            (it.kind == "folder" && it.value == snapshot.folder) ||
+                                (it.kind == "media" && it.value == snapshot.id)
+                        }
+                    val changed =
+                        old == null ||
+                            old.modified != snapshot.modified ||
+                            old.size != snapshot.size ||
+                            !old.accessible ||
+                            old.excluded != excluded
+                    val item =
+                        snapshot.copy(
+                            hash = old?.hash ?: "",
+                            searchText = old?.searchText ?: "",
+                            analyzed = !changed && old?.analyzed == true,
+                            error = old?.error ?: "",
+                            excluded = excluded,
+                        )
+                    dao.media(item)
+                    if (item.excluded) purgeDerived(item.id)
+                    else if (changed) dao.stage(Stage(item.id, "0hash"))
+                    if (
+                        old == null ||
+                            old.name != item.name ||
+                            old.folder != item.folder ||
+                            old.dateTaken != item.dateTaken ||
+                            old.excluded != excluded
+                    )
+                        refreshSearch(item.id)
                 }
             }
         }

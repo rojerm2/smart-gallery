@@ -3,6 +3,13 @@
 Keep fixtures and results under ignored `.ai/evaluation/` or another private directory. Use only
 consented media or clearly licensed fixtures. The app does not upload evaluation media or results.
 
+For a stalled personal installation, `IndexDiagnosticsTest` accepts the explicit argument
+`-e indexDiagnostics true`. Run only that class with the matching test APK. It opens the existing
+database read-only and reports aggregate media/stage counts and fixed indexing settings; it never
+reconciles, resets, or exports records, identifiers, OCR, embeddings or images. Instrumentation
+restarts the app process, so reopen the app afterward and do not treat its elapsed time as an
+indexing benchmark. This opt-in diagnostic skips during the ordinary fixture suite.
+
 For redistributable fixtures, the optional `PrivateEvaluationTest` reads `evaluation/manifest.json`
 from test-only assets. Add a directory through `-PprivateEvalAssets=.ai/evaluation/assets`, build
 the test APK and run that class on a selected phone. This packages those assets in the ignored

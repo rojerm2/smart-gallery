@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.ContextWrapper
 import android.content.SharedPreferences
 import android.os.Build
+import android.os.SystemClock
 import android.provider.MediaStore
 import androidx.room.Room
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -32,7 +33,11 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class PipelineIntegrationTest {
-    private class IsolatedContext(base: Context, val key: String) : ContextWrapper(base) {
+    private class IsolatedContext(
+        base: Context,
+        val key: String,
+        val onChecking: (() -> Unit)? = null,
+    ) : ContextWrapper(base) {
         private val root = File(base.noBackupFilesDir, key).apply { mkdirs() }
 
         override fun getApplicationContext(): Context = this
@@ -43,8 +48,26 @@ class PipelineIntegrationTest {
 
         override fun getCacheDir(): File = File(root, "cache").apply { mkdirs() }
 
-        override fun getSharedPreferences(name: String, mode: Int): SharedPreferences =
-            super.getSharedPreferences("$key-$name", mode)
+        override fun getSharedPreferences(name: String, mode: Int): SharedPreferences {
+            val prefs = super.getSharedPreferences("$key-$name", mode)
+            if (onChecking == null) return prefs
+            return object : SharedPreferences by prefs {
+                override fun edit(): SharedPreferences.Editor {
+                    val editor = prefs.edit()
+                    return object : SharedPreferences.Editor by editor {
+                        override fun putString(
+                            key: String?,
+                            value: String?,
+                        ): SharedPreferences.Editor {
+                            if (key == "reason" && value == "Checking accessible media")
+                                onChecking.invoke()
+                            editor.putString(key, value)
+                            return this
+                        }
+                    }
+                }
+            }
+        }
 
         fun cleanup() {
             root.deleteRecursively()
@@ -52,7 +75,11 @@ class PipelineIntegrationTest {
         }
     }
 
-    private fun worker(context: Context, repo: GalleryRepository) =
+    private fun worker(
+        context: Context,
+        repo: GalleryRepository,
+        elapsedRealtime: () -> Long = SystemClock::elapsedRealtime,
+    ) =
         TestListenableWorkerBuilder<IndexWorker>(context)
             .setWorkerFactory(
                 object : WorkerFactory() {
@@ -62,11 +89,62 @@ class PipelineIntegrationTest {
                         workerParameters: WorkerParameters,
                     ): ListenableWorker? =
                         if (workerClassName == IndexWorker::class.java.name)
-                            IndexWorker(context, workerParameters, repo)
+                            IndexWorker(context, workerParameters, repo, elapsedRealtime)
                         else null
                 }
             )
             .build()
+
+    @Test
+    fun discoveryLongerThanTheSliceStillAllowsActualPhotoInference() = runBlocking {
+        assumeTrue(Build.VERSION.SDK_INT >= 29)
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        requireFixtureOnlyGalleryAccess(instrumentation.targetContext)
+        var elapsed = 0L
+        val context =
+            IsolatedContext(instrumentation.targetContext, "discovery-${UUID.randomUUID()}") {
+                // Advance monotonic time during discovery instead of sleeping for two minutes.
+                elapsed += 120_001L
+            }
+        val bytes = instrumentation.context.assets.open("chelsea.png").use { it.readBytes() }
+        val uri =
+            context.contentResolver.insert(
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                ContentValues().apply {
+                    put(MediaStore.MediaColumns.DISPLAY_NAME, "${context.key}.png")
+                    put(MediaStore.MediaColumns.MIME_TYPE, "image/png")
+                    put(MediaStore.MediaColumns.RELATIVE_PATH, "Pictures/SmartGalleryTests/")
+                    put(MediaStore.MediaColumns.IS_PENDING, 1)
+                },
+            )!!
+        val db = Room.inMemoryDatabaseBuilder(context, GalleryDatabase::class.java).build()
+        try {
+            context.contentResolver.openOutputStream(uri)!!.use { it.write(bytes) }
+            context.contentResolver.update(
+                uri,
+                ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) },
+                null,
+                null,
+            )
+            val repo = GalleryRepository(context, db)
+            repo.settings.chargingOnly = false
+            assertEquals(
+                ListenableWorker.Result.success(),
+                worker(context, repo) { elapsed }.doWork(),
+            )
+            val item = repo.dao.accessibleMedia().single { it.name == "${context.key}.png" }
+            assertTrue("Long discovery must not consume the inference slice", item.analyzed)
+            assertTrue(repo.dao.distinctLabels(item.id).any { it.equals("Cat", true) })
+            assertArrayEquals(
+                bytes,
+                context.contentResolver.openInputStream(uri)!!.use { it.readBytes() },
+            )
+        } finally {
+            db.close()
+            context.contentResolver.delete(uri, null, null)
+            context.cleanup()
+        }
+    }
 
     @Test
     fun realWorkerResumesVideoAfterDatabaseReopenAndPreservesCorrectionsOnReindex() = runBlocking {

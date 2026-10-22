@@ -129,6 +129,13 @@ data class CategoryCard(val label: String, val count: Int, val cover: String?)
 
 data class Progress(val total: Int, val done: Int, val failed: Int)
 
+data class AnalysisVersions(
+    val mediaId: String,
+    val video: Boolean,
+    val faceVersion: String?,
+    val contentVersion: String?,
+)
+
 @Dao
 interface GalleryDao {
     @Upsert suspend fun media(media: Media)
@@ -139,6 +146,17 @@ interface GalleryDao {
 
     @Query("SELECT * FROM media WHERE accessible=1 AND excluded=0 ORDER BY dateTaken DESC")
     suspend fun accessibleMedia(): List<Media>
+
+    @Query(
+        """SELECT m.id AS mediaId, (m.mime LIKE 'video/%') AS video,
+        f.version AS faceVersion, c.version AS contentVersion
+        FROM media m LEFT JOIN stages f ON f.mediaId=m.id
+        AND f.kind=CASE WHEN m.mime LIKE 'video/%' THEN '1video' ELSE '1faces' END
+        LEFT JOIN stages c ON c.mediaId=m.id AND c.kind='2content'
+        WHERE m.accessible=1 AND m.excluded=0 AND m.hash!='' AND m.id>:afterId
+        ORDER BY m.id LIMIT 100"""
+    )
+    suspend fun analysisVersions(afterId: String): List<AnalysisVersions>
 
     @Query("SELECT id FROM media WHERE scanToken!=:token AND accessible=1")
     suspend fun unseen(token: String): List<String>

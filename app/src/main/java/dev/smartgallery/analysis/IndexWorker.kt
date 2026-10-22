@@ -85,6 +85,7 @@ constructor(
     context: Context,
     params: WorkerParameters,
     private val repository: GalleryRepository = GalleryRepository(context),
+    private val elapsedRealtime: () -> Long = SystemClock::elapsedRealtime,
 ) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result =
         workerMutex.withLock {
@@ -93,7 +94,6 @@ constructor(
                 val dao = repo.dao
                 if (repo.settings.paused) return@withContext Result.success()
                 val generation = repo.settings.generation
-                val start = SystemClock.elapsedRealtime()
                 fun shouldYield(): Boolean {
                     val power = applicationContext.getSystemService(PowerManager::class.java)
                     return isStopped ||
@@ -108,6 +108,9 @@ constructor(
                 try {
                     repo.settings.reason = "Checking accessible media"
                     repo.reconcile()
+                    // Initial discovery can exceed a slice on a large library. Give inference
+                    // its own budget so every continuation can actually consume the queue.
+                    val start = elapsedRealtime()
                     if (dao.nextStage() == null) {
                         repo.settings.reason = "Up to date"
                         return@withContext Result.success()
@@ -120,7 +123,7 @@ constructor(
                         else Result.retry()
                     }
                     VisionEngine(applicationContext).use { engine ->
-                        while (SystemClock.elapsedRealtime() - start < 120_000) {
+                        while (elapsedRealtime() - start < 120_000) {
                             if (shouldYield()) {
                                 repo.settings.reason = "Waiting for resources or resume"
                                 return@withContext if (repo.settings.paused) Result.success()
@@ -243,8 +246,7 @@ constructor(
                                             var index = stage.checkpoint
                                             while (
                                                 index < frames.size &&
-                                                    SystemClock.elapsedRealtime() - start <
-                                                        120_000 &&
+                                                    elapsedRealtime() - start < 120_000 &&
                                                     !shouldYield()
                                             ) {
                                                 val decoded = retriever.frameAt(frames[index])

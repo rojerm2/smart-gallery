@@ -24,6 +24,10 @@ accuracy, battery and target Redmi/HyperOS acceptance are not established by the
   pause/resume, charging-only defaults, thermal/low-storage yielding and periodic WorkManager jobs.
 - Folder/item exclusions, reindexing that preserves corrections, and an explicitly confirmed reset.
 
+On first access, the app discovers accessible media before analyzing it. The analyzed-item count
+increases when an item's required stages finish. Discovery writes metadata in bounded batches,
+and the worker starts its analysis time budget after discovery so large libraries can make progress.
+
 ## Privacy
 
 No account or cloud recognition is used. The production manifest removes `INTERNET` and
