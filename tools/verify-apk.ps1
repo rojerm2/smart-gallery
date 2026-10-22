@@ -12,7 +12,7 @@ try {
         if ($required -notin $paths) { throw "Missing bundled resource: $required" }
     }
     if (-not ($paths -match '^assets/mlkit-google-ocr-models/.*conv_model')) { throw 'Missing bundled OCR resources' }
-    if ($paths -match '^assets/(astronaut|grace_hopper|later-appearance|evaluation/)') { throw 'Test or private evaluation assets entered app APK' }
+    if ($paths -match '^assets/(astronaut|grace_hopper|chelsea|coffee|later-appearance|evaluation/)') { throw 'Test or private evaluation assets entered app APK' }
     $stream = $archive.GetEntry('assets/models/mobile_facenet.tflite').Open()
     try {
         $sha = [System.Security.Cryptography.SHA256]::Create()

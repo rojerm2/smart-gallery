@@ -1,7 +1,6 @@
 package dev.smartgallery
 
 import android.graphics.Bitmap
-import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Bundle
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -72,17 +71,17 @@ class VideoIntegrationTest {
             File(context.cacheDir, "corrupt-test.mp4").apply {
                 writeText("synthetic invalid video")
             }
-        val retriever = MediaMetadataRetriever()
+        var retriever: VideoFrameReader? = null
         var rejected = false
         try {
             try {
-                retriever.setDataSource(file.path)
-            } catch (_: RuntimeException) {
+                retriever = VideoFrameReader(context, Uri.fromFile(file))
+            } catch (_: Exception) {
                 rejected = true
             }
             assertTrue(rejected)
         } finally {
-            retriever.release()
+            retriever?.close()
             file.delete()
         }
     }

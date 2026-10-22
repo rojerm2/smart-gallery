@@ -406,13 +406,12 @@ private fun mediaAccess(context: android.content.Context): String {
         )
             "Full access"
         else if (
-            (Build.VERSION.SDK_INT >= 34 &&
-                granted(Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED)) ||
-                granted(Manifest.permission.READ_MEDIA_IMAGES) ||
-                granted(Manifest.permission.READ_MEDIA_VIDEO)
+            Build.VERSION.SDK_INT >= 34 &&
+                granted(Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED)
         )
             "Selected media"
-        else "No access"
+        else if (granted(Manifest.permission.READ_MEDIA_IMAGES)) "Photos only"
+        else if (granted(Manifest.permission.READ_MEDIA_VIDEO)) "Videos only" else "No access"
     } else if (granted(Manifest.permission.READ_EXTERNAL_STORAGE)) "Full access" else "No access"
 }
 
@@ -539,6 +538,8 @@ fun MediaGrid(vm: GalleryViewModel, onOpen: (Media) -> Unit) {
                         model =
                             ImageRequest.Builder(LocalContext.current)
                                 .data(media.uri)
+                                .memoryCacheKey("${media.uri}:${media.modified}:${media.size}")
+                                .diskCacheKey("${media.uri}:${media.modified}:${media.size}")
                                 .size(320)
                                 .build(),
                         contentDescription = media.name,

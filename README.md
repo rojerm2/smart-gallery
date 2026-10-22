@@ -13,8 +13,8 @@ accuracy, battery and target Redmi/HyperOS acceptance are not established by the
   Repeated video frames and byte-identical copies do not inflate that support.
 - Complete-link matching with ambiguity margins. Singleton review, naming, promotion, assignment,
   merging, splitting, removal, negative constraints, dismissing and recent-correction undo.
-- Versioned, normalized MobileFaceNet embeddings from aligned faces. Tiny, blurred, occluded or
-  extreme-pose faces are filtered. Higher-resolution source-region retries do not invent detail.
+- Versioned, normalized MobileFaceNet embeddings from aligned faces. Tiny, blurred or extreme-pose
+  faces and missing landmarks are filtered. Higher-resolution source-region retries do not invent detail.
 - Bundled image labeling and OCR. Conservative visual/text rules for broad documents, receipts
   and IDs; manual category overrides. A Dog category does not recognize an individual pet.
 - Combined local search: `Dog 2026-10`, `Alice Camera`, or `"total PHP"`. All terms must match;
@@ -33,7 +33,8 @@ caches stay in app-private storage; backup and device-transfer extraction are ex
 Analysis never moves, edits or deletes originals. Sharing is user-initiated through Android with
 a temporary read URI grant. Revoked or missing media is hidden and its derived content purged;
 minimal correction records remain to restore confirmed decisions if identical content returns.
-Reset removes those records too. Debug builds permit local ADB inspection and are for testing.
+Reset removes those records too and preserves folder/item exclusions as privacy preferences.
+Debug builds permit local ADB inspection and are for testing.
 
 ## Build
 
@@ -97,7 +98,8 @@ must remain outside Git. Do not publish test APKs containing private evaluation 
   guaranteed extraction; screenshots cannot automatically become receipts or IDs through text alone.
 - Normal videos use at most 120 evenly distributed samples (about ten-second spacing for short
   clips); thorough mode uses at most 600 (about two-second spacing). Sampling can miss brief faces.
-  Results retain sampled timestamps, not frame-perfect appearance intervals.
+  MediaCodec decodes actual frame timestamps; results do not imply frame-perfect appearance intervals.
+  Unsupported codecs and videos above the decoder's 16-megapixel budget remain browseable but can fail analysis.
 - Automatic additions stop at 50 faces in one group to bound conservative comparisons. Manual
   corrections remain available; candidates beyond that limit stay in review.
 - Byte-identical copies are deduplicated for support. Visually similar/recompressed copies are

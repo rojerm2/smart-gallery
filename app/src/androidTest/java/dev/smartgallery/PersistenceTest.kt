@@ -16,6 +16,23 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class PersistenceTest {
+    @Test
+    fun personCoverMustBeAUsableFaceEvenWhenAnExcludedCropIsSharper() = runBlocking {
+        val db = Room.inMemoryDatabaseBuilder(context, GalleryDatabase::class.java).build()
+        try {
+            val repo = GalleryRepository(context, db)
+            fixture(repo, "a")
+            val person = repo.dao.membershipById("fa")!!.personId
+            repo.dao.face(
+                face("excluded", "a").copy(usable = false, quality = 9999.0, crop = "excluded.jpg")
+            )
+            repo.dao.membership(Membership("excluded", person, confident = true))
+            assertEquals("fa.jpg", repo.dao.peopleCards().first().single().cover)
+        } finally {
+            db.close()
+        }
+    }
+
     private val context = InstrumentationRegistry.getInstrumentation().targetContext
 
     private fun vector(x: Float = 1f, y: Float = 0f) =

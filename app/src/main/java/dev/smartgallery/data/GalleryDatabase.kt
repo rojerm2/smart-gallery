@@ -135,6 +135,8 @@ interface GalleryDao {
 
     @Query("SELECT * FROM media WHERE id=:id") suspend fun mediaById(id: String): Media?
 
+    @Query("SELECT * FROM media WHERE id=:id") fun observeMedia(id: String): Flow<Media?>
+
     @Query("SELECT * FROM media WHERE accessible=1 AND excluded=0 ORDER BY dateTaken DESC")
     suspend fun accessibleMedia(): List<Media>
 
@@ -299,7 +301,7 @@ interface GalleryDao {
     @Query("SELECT * FROM undo ORDER BY id DESC LIMIT 1") fun undoState(): Flow<Undo?>
 
     @Query(
-        "SELECT p.id,p.name,p.promoted,(SELECT f2.crop FROM faces f2 JOIN memberships m2 ON f2.id=m2.faceId JOIN media md2 ON md2.id=f2.mediaId WHERE m2.personId=p.id AND m2.dismissed=0 AND f2.active=1 AND md2.accessible=1 AND md2.excluded=0 ORDER BY f2.quality DESC LIMIT 1) AS cover, count(DISTINCT CASE WHEN m.confident=1 THEN f.hash END) AS support,count(DISTINCT f.mediaId) AS count FROM people p JOIN memberships m ON m.personId=p.id JOIN faces f ON f.id=m.faceId JOIN media md ON md.id=f.mediaId WHERE m.dismissed=0 AND f.active=1 AND f.usable=1 AND md.accessible=1 AND md.excluded=0 GROUP BY p.id ORDER BY p.name"
+        "SELECT p.id,p.name,p.promoted,(SELECT f2.crop FROM faces f2 JOIN memberships m2 ON f2.id=m2.faceId JOIN media md2 ON md2.id=f2.mediaId WHERE m2.personId=p.id AND m2.dismissed=0 AND f2.active=1 AND f2.usable=1 AND md2.accessible=1 AND md2.excluded=0 ORDER BY f2.quality DESC LIMIT 1) AS cover, count(DISTINCT CASE WHEN m.confident=1 THEN f.hash END) AS support,count(DISTINCT f.mediaId) AS count FROM people p JOIN memberships m ON m.personId=p.id JOIN faces f ON f.id=m.faceId JOIN media md ON md.id=f.mediaId WHERE m.dismissed=0 AND f.active=1 AND f.usable=1 AND md.accessible=1 AND md.excluded=0 GROUP BY p.id ORDER BY p.name"
     )
     fun peopleCards(): Flow<List<PersonCard>>
 

@@ -14,6 +14,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -21,6 +22,8 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLocale
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -44,12 +47,22 @@ import kotlinx.coroutines.withContext
 
 @Composable
 fun MediaViewer(vm: GalleryViewModel, media: Media, onClose: () -> Unit, onFace: (Face) -> Unit) {
+    val liveMedia by remember(media.id) { vm.repo.dao.observeMedia(media.id) }.collectAsState(media)
+    LaunchedEffect(liveMedia?.accessible, liveMedia?.modified, liveMedia?.size) {
+        if (
+            liveMedia?.accessible != true ||
+                liveMedia?.modified != media.modified ||
+                liveMedia?.size != media.size
+        )
+            onClose()
+    }
     val context = LocalContext.current
     val locale = LocalLocale.current.platformLocale
     var details by remember { mutableStateOf(false) }
     var addLabel by remember { mutableStateOf(false) }
     var exclude by remember { mutableStateOf(false) }
     var failed by remember { mutableStateOf(false) }
+    var loading by remember { mutableStateOf(true) }
     var timestamp by remember { mutableLongStateOf(0) }
     var labels by remember { mutableStateOf(emptyList<String>()) }
     var ocr by remember { mutableStateOf("") }
@@ -137,7 +150,10 @@ fun MediaViewer(vm: GalleryViewModel, media: Media, onClose: () -> Unit, onFace:
                         Icon(Icons.Rounded.Share, "Share", tint = Color.White)
                     }
                 }
-                Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                Box(
+                    Modifier.weight(1f).fillMaxWidth().clipToBounds(),
+                    contentAlignment = Alignment.Center,
+                ) {
                     if (failed)
                         Text(
                             "This item is no longer accessible or could not be opened.",
@@ -151,10 +167,20 @@ fun MediaViewer(vm: GalleryViewModel, media: Media, onClose: () -> Unit, onFace:
                         var offset by remember { mutableStateOf(Offset.Zero) }
                         AsyncImage(
                             model =
-                                ImageRequest.Builder(context).data(media.uri).size(2560).build(),
-                            contentDescription = media.name,
+                                ImageRequest.Builder(context)
+                                    .data(media.uri)
+                                    .memoryCacheKey("${media.uri}:${media.modified}:${media.size}")
+                                    .diskCacheKey("${media.uri}:${media.modified}:${media.size}")
+                                    .size(2560)
+                                    .build(),
+                            contentDescription = "Photo: ${media.name}",
                             contentScale = ContentScale.Fit,
-                            onError = { failed = true },
+                            onLoading = { loading = true },
+                            onSuccess = { loading = false },
+                            onError = {
+                                failed = true
+                                loading = false
+                            },
                             modifier =
                                 Modifier.fillMaxSize()
                                     .pointerInput(Unit) {
@@ -178,6 +204,12 @@ fun MediaViewer(vm: GalleryViewModel, media: Media, onClose: () -> Unit, onFace:
                                         translationY = offset.y,
                                     ),
                         )
+                        if (loading)
+                            CircularProgressIndicator(
+                                color = Color.White,
+                                modifier =
+                                    Modifier.semantics { contentDescription = "Loading photo" },
+                            )
                     }
                 }
                 if (media.video && matches.isNotEmpty())

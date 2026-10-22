@@ -37,8 +37,16 @@ class UiSmokeTest {
             assertTrue(
                 device.wait(Until.hasObject(By.text("A little help, when you like")), 10_000)
             )
+            device.waitForIdle()
             device.findObject(By.desc("Settings and indexing")).click()
-            assertTrue(device.wait(Until.hasObject(By.text("On this phone")), 10_000))
+            val settingsVisible = device.wait(Until.hasObject(By.text("On this phone")), 10_000)
+            if (!settingsVisible) {
+                device.takeScreenshot(File(context.cacheDir, "settings-navigation-failure.png"))
+                device.dumpWindowHierarchy(
+                    File(context.cacheDir, "settings-navigation-failure.xml")
+                )
+            }
+            assertTrue("Settings must open from Review faces", settingsVisible)
             device.waitForIdle()
             device.findObject(By.desc("Back")).click()
             device.waitForIdle()

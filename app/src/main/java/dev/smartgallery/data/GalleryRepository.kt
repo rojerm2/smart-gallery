@@ -664,8 +664,11 @@ class GalleryRepository(
         gate.withLock {
             settings.generation++
             settings.paused = true
+            val exclusions = dao.exclusionList()
             withContext(Dispatchers.IO) {
                 db.clearAllTables()
+                // Exclusions are privacy preferences, not derived recognition results.
+                exclusions.forEach { dao.exclusion(it) }
                 crops.listFiles()?.forEach { it.delete() }
                 context.cacheDir
                     .listFiles()

@@ -9,6 +9,13 @@ import coil.memory.MemoryCache
 import java.io.File
 
 class GalleryApp : Application(), ImageLoaderFactory {
+    @androidx.annotation.OptIn(markerClass = [androidx.media3.common.util.UnstableApi::class])
+    override fun onCreate() {
+        super.onCreate()
+        // Media3 source exceptions can include content URIs; keep them out of diagnostic logs.
+        androidx.media3.common.util.Log.setLogLevel(androidx.media3.common.util.Log.LOG_LEVEL_OFF)
+    }
+
     override fun newImageLoader() =
         ImageLoader.Builder(this)
             .components { add(VideoFrameDecoder.Factory()) }
