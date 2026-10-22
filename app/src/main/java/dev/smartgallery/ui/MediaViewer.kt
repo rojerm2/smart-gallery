@@ -1,8 +1,6 @@
 package dev.smartgallery.ui
 
-import android.content.ClipData
 import android.content.Intent
-import android.net.Uri
 import androidx.compose.foundation.*
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
@@ -125,20 +123,9 @@ fun MediaViewer(vm: GalleryViewModel, media: Media, onClose: () -> Unit, onFace:
                     IconButton(
                         onClick = {
                             try {
-                                val uri = Uri.parse(media.uri)
                                 context.startActivity(
                                     Intent.createChooser(
-                                        Intent(Intent.ACTION_SEND).apply {
-                                            type = media.mime
-                                            putExtra(Intent.EXTRA_STREAM, uri)
-                                            clipData =
-                                                ClipData.newUri(
-                                                    context.contentResolver,
-                                                    "Media",
-                                                    uri,
-                                                )
-                                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                        },
+                                        mediaShareIntent(context, media),
                                         "Share media",
                                     )
                                 )

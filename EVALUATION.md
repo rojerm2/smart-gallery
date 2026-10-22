@@ -80,3 +80,13 @@ continued to completion. This helper detects that specific state and foregrounds
 app; it does not restart tests merely because an observation takes a long time. Logs retain
 skips separately from passes. It does not change system power settings or prove background
 reliability on ColorOS/HyperOS; manufacturer background and resource acceptance remain separate.
+
+## Temporary sharing grants
+
+`SharingIntegrationTest` creates one public-domain MediaStore fixture owned by the target app.
+It sends the production ACTION_SEND payload directly to a test-only activity in the test APK,
+which runs under a separate UID and has no gallery permission. The receiver must fail to read
+without a grant, read the exact original with the read grant, receive no write grant, and fail
+again after the granted activity finishes. The fixture is then removed and reconciled.
+This checks Android URI access across processes without sending media to an external service.
+The receiver is absent from the production manifest; Android chooser UI navigation is separate.

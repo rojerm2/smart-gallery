@@ -86,6 +86,8 @@ alignment/embeddings, Room persistence, correction undo/negative constraints and
 It also exercises groups larger than one database page, repeated video faces, reindexing during
 actual decoding, and corrections/undo across rediscovered face records. Older records without
 face-location evidence may need confirmation after reanalysis.
+The receiving-app share test checks a separate UID, original-byte reads, no write grant and
+revocation after the receiving activity finishes, using only a test-created fixture.
 NASA/US Navy public-domain fixtures are in the test APK only, with attribution in the notices.
 
 The licensed two-identity micro-evaluation is a smoke check, not a held-out accuracy estimate.
