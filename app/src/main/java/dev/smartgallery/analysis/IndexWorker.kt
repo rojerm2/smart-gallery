@@ -128,7 +128,21 @@ constructor(
                             }
                             repo.settings.reason =
                                 if (item.video) "Analyzing video frames" else "Analyzing photos"
-                            dao.stage(stage.copy(state = "running"))
+                            val claimed =
+                                GalleryRepository.gate.withLock {
+                                    repo.db.withTransaction {
+                                        if (
+                                            !valid(repo, item, generation) ||
+                                                dao.stageById(stage.mediaId, stage.kind) != stage
+                                        )
+                                            false
+                                        else {
+                                            dao.stage(stage.copy(state = "running"))
+                                            true
+                                        }
+                                    }
+                                }
+                            if (!claimed) continue
                             try {
                                 when (stage.kind) {
                                     "0hash" -> {
@@ -305,6 +319,7 @@ constructor(
                             } catch (_: SecurityException) {
                                 GalleryRepository.gate.withLock {
                                     repo.db.withTransaction {
+                                        if (!valid(repo, item, generation)) return@withTransaction
                                         dao.inaccessible(item.id)
                                         repo.purgeDerived(item.id)
                                     }
@@ -312,6 +327,7 @@ constructor(
                             } catch (_: java.io.FileNotFoundException) {
                                 GalleryRepository.gate.withLock {
                                     repo.db.withTransaction {
+                                        if (!valid(repo, item, generation)) return@withTransaction
                                         dao.inaccessible(item.id)
                                         repo.purgeDerived(item.id)
                                     }

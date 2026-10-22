@@ -18,8 +18,13 @@ import dev.smartgallery.data.*
 import java.io.File
 import java.security.MessageDigest
 import java.util.UUID
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.*
 import org.junit.Assume.assumeTrue
 import org.junit.Test
@@ -126,7 +131,29 @@ class PipelineIntegrationTest {
             val face = faces.first()
             repo.assign(face.id, null, "Confirmed fixture person")
             val person = repo.dao.membershipById(face.id)!!.personId
+            repo.settings.thorough = true
             repo.reindex()
+            val active = async(Dispatchers.Default) { worker(context, repo).doWork() }
+            try {
+                withTimeout(60_000) {
+                    while (
+                        repo.dao.stageById(item.id, "1video")!!.let {
+                            it.state != "running" || it.checkpoint < 2
+                        }
+                    ) {
+                        check(!active.isCompleted) { "Need an actual in-flight video checkpoint" }
+                        delay(10)
+                    }
+                }
+                // An old decode must not overwrite this new queue's checkpoint or completion state.
+                repo.reindex()
+                active.await()
+            } finally {
+                active.cancelAndJoin()
+            }
+            assertEquals(0, repo.dao.stageById(item.id, "1video")!!.checkpoint)
+            assertEquals("pending", repo.dao.stageById(item.id, "1video")!!.state)
+            assertFalse(repo.dao.mediaById(item.id)!!.analyzed)
             assertEquals(ListenableWorker.Result.success(), worker(context, repo).doWork())
             assertEquals(person, repo.dao.membershipById(face.id)!!.personId)
             assertTrue(repo.dao.membershipById(face.id)!!.manual)

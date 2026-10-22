@@ -211,6 +211,11 @@ interface GalleryDao {
     )
     suspend fun personFaces(id: String): List<Face>
 
+    @Query(
+        "SELECT f.* FROM faces f JOIN memberships m ON f.id=m.faceId JOIN media md ON md.id=f.mediaId WHERE m.personId=:id AND f.model=:model AND f.active=1 AND f.usable=1 AND m.dismissed=0 AND md.accessible=1 AND md.excluded=0 AND f.id>:after ORDER BY f.id LIMIT :limit"
+    )
+    suspend fun personFacePage(id: String, model: String, after: String, limit: Int): List<Face>
+
     @Query("SELECT * FROM faces WHERE mediaId=:id")
     suspend fun facesForMedia(id: String): List<Face>
 
@@ -233,8 +238,8 @@ interface GalleryDao {
     @Query("SELECT * FROM memberships WHERE faceId=:id")
     suspend fun membershipById(id: String): Membership?
 
-    @Query("SELECT * FROM memberships WHERE anchor=:anchor AND manual=1 LIMIT 1")
-    suspend fun manualByAnchor(anchor: String): Membership?
+    @Query("SELECT * FROM memberships WHERE anchor=:anchor")
+    suspend fun membershipsByAnchor(anchor: String): List<Membership>
 
     @Query("SELECT * FROM memberships WHERE personId=:id")
     suspend fun membershipsForPerson(id: String): List<Membership>

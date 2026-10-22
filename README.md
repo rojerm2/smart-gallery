@@ -83,6 +83,9 @@ Signing material and APKs are intentionally not committed.
 Unit tests cover support counting, ambiguity, weak bridges, quality, document-rule negatives,
 search tokenization and bounded sampling. Instrumentation covers bundled inference, actual
 alignment/embeddings, Room persistence, correction undo/negative constraints and schema migration.
+It also exercises groups larger than one database page, repeated video faces, reindexing during
+actual decoding, and corrections/undo across rediscovered face records. Older records without
+face-location evidence may need confirmation after reanalysis.
 NASA/US Navy public-domain fixtures are in the test APK only, with attribution in the notices.
 
 The licensed two-identity micro-evaluation is a smoke check, not a held-out accuracy estimate.
@@ -100,13 +103,15 @@ must remain outside Git. Do not publish test APKs containing private evaluation 
   clips); thorough mode uses at most 600 (about two-second spacing). Sampling can miss brief faces.
   MediaCodec decodes actual frame timestamps; results do not imply frame-perfect appearance intervals.
   Unsupported codecs and videos above the decoder's 16-megapixel budget remain browseable but can fail analysis.
-- Automatic additions stop at 50 faces in one group to bound conservative comparisons. Manual
-  corrections remain available; candidates beyond that limit stay in review.
+- Automatic matching uses complete-link comparisons in bounded database pages. Reindex rebuilds
+  unconfirmed groups, including fragments from the earlier 50-face cap, and preserves corrections.
 - Byte-identical copies are deduplicated for support. Visually similar/recompressed copies are
   not treated as exact duplicates. Originals are always independently browsable.
 - Background timing is controlled by Android and the manufacturer. No overnight completion-time,
   universal recognition accuracy or device battery claim is made.
-- Android 14+ selected/revoked permission paths and target Redmi Note 14 4G need physical tests
-  on that OS/device. An OPPO Android 11 test does not establish Redmi compatibility.
+- On Redmi Note 14 4G (24117RN76G), Android 16 / HyperOS 3.0.302.0, bundled inference and
+  persistence tests passed during a first-launch airplane-mode run. Abrupt process recovery also
+  passed with owned fixtures. Automated taps require HyperOS's USB debugging security setting;
+  modern selected/revoked access, reboot, background policy and resource checks remain pending.
 
 Application code is Apache-2.0; third-party SDKs and model weights retain their separate terms.

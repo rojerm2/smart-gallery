@@ -52,6 +52,12 @@ class GallerySettings(context: Context) {
             prefs.edit().putBoolean("legacyPeopleConfirmed-v1", v).commit()
         }
 
+    internal var legacyConstraintTargetsConfirmed: Boolean
+        get() = prefs.getBoolean("legacyConstraintTargetsConfirmed-v1", false)
+        set(v) {
+            prefs.edit().putBoolean("legacyConstraintTargetsConfirmed-v1", v).commit()
+        }
+
     var generation: Long
         get() = prefs.getLong("generation", 0)
         set(v) {
@@ -248,14 +254,25 @@ class GalleryRepository(
             }
         }
 
-    /** Upgrade older named/promoted groups once, without pinning later machine additions. */
+    /** Upgrade older explicit group references once, without pinning later machine additions. */
     internal suspend fun preserveLegacyPeopleDecisions() {
-        if (settings.legacyPeopleConfirmed) return
+        if (settings.legacyPeopleConfirmed && settings.legacyConstraintTargetsConfirmed) return
         gate.withLock {
-            if (settings.legacyPeopleConfirmed) return@withLock
+            if (settings.legacyPeopleConfirmed && settings.legacyConstraintTargetsConfirmed)
+                return@withLock
             db.withTransaction {
+                val targets =
+                    if (settings.legacyConstraintTargetsConfirmed) emptySet()
+                    else
+                        dao.negatives()
+                            .flatMap { listOf(it.a, it.b) }
+                            .filter { it.startsWith("p:") }
+                            .map { it.removePrefix("p:") }
+                            .toSet()
                 for (person in dao.allPeople()) {
-                    if (!person.promoted && person.name == Person("").name) continue
+                    val named = person.promoted || person.name != Person("").name
+                    if ((settings.legacyPeopleConfirmed || !named) && person.id !in targets)
+                        continue
                     for (member in dao.membershipsForPerson(person.id)) {
                         dao.membership(
                             member.copy(
@@ -267,6 +284,7 @@ class GalleryRepository(
                 }
             }
             settings.legacyPeopleConfirmed = true
+            settings.legacyConstraintTargetsConfirmed = true
         }
     }
 
@@ -324,29 +342,55 @@ class GalleryRepository(
         val existing = dao.membershipById(face.id)
         if (existing?.manual == true) return
         val anchor = anchor(face)
-        val confirmed = dao.manualByAnchor(anchor)
+        val decisions = dao.membershipsByAnchor(anchor).filter { it.manual }.distinctDecisions()
+        val confirmed = decisions.singleOrNull()
         if (confirmed != null) {
             dao.membership(confirmed.copy(faceId = face.id))
             return
         }
         if (existing != null) return
+        if (decisions.size > 1) {
+            // Older contradictory aliases cannot establish a single confirmed identity.
+            val person = UUID.randomUUID().toString()
+            dao.person(Person(person))
+            dao.membership(Membership(face.id, person, confident = false, anchor = anchor))
+            return
+        }
         val constraints = dao.negatives()
         val scores = mutableListOf<Pair<String, Float>>()
         for (person in dao.allPeople()) {
-            val members = dao.personFaces(person.id).filter { it.model == face.model }
-            if (members.isEmpty() || members.size >= 50) continue
             val banned =
                 constraints.any { n ->
                     pair(n.a, n.b) == pair("f:${face.id}", "p:${person.id}") ||
                         pair(n.a, n.b) == pair("a:$anchor", "p:${person.id}")
                 }
-            if (!banned)
-                scores +=
-                    person.id to IdentityPolicy.score(face.vector(), members.map { it.vector() })
+            if (!banned) {
+                personScore(face, person.id, IdentityPolicy.MATCH - IdentityPolicy.MARGIN)?.let {
+                    scores += person.id to it
+                }
+            }
         }
         val chosen = IdentityPolicy.choose(scores)
         val person = chosen ?: UUID.randomUUID().toString().also { dao.person(Person(it)) }
         dao.membership(Membership(face.id, person, confident = true, anchor = anchor))
+    }
+
+    /** Complete-link comparison in bounded pages, including long videos and large identities. */
+    private suspend fun personScore(face: Face, personId: String, floor: Float): Float? {
+        val vector = face.vector()
+        var after = ""
+        var minimum: Float? = null
+        while (true) {
+            val page = dao.personFacePage(personId, face.model, after, 64)
+            if (page.isEmpty()) return minimum
+            for (member in page) {
+                val score = IdentityPolicy.cosine(vector, member.vector())
+                minimum = minOf(minimum ?: score, score)
+                // This upper bound is already too low to affect matching/ambiguity or review.
+                if (minimum < floor) return minimum
+            }
+            after = page.last().id
+        }
     }
 
     suspend fun suggestions(face: Face): List<Pair<Person, Float>> {
@@ -362,11 +406,7 @@ class GalleryRepository(
                             (current != null && pair(it.a, it.b) == pair("p:$current", "p:${p.id}"))
                     }
             }
-            .mapNotNull { p ->
-                val fs = dao.personFaces(p.id).filter { it.model == face.model }
-                if (fs.isEmpty()) null
-                else p to IdentityPolicy.score(face.vector(), fs.map { it.vector() })
-            }
+            .mapNotNull { p -> personScore(face, p.id, IdentityPolicy.REVIEW)?.let { p to it } }
             .filter { it.second >= IdentityPolicy.REVIEW }
             .sortedByDescending { it.second }
             .take(3)
@@ -384,7 +424,7 @@ class GalleryRepository(
     ) =
         gate.withLock {
             db.withTransaction {
-                val affectedFaces =
+                val primaryFaces =
                     (faces +
                             if (confirmPeople)
                                 people.flatMap { id ->
@@ -392,7 +432,35 @@ class GalleryRepository(
                                 }
                             else emptyList())
                         .distinct()
+                val anchors =
+                    primaryFaces
+                        .mapNotNull { id ->
+                            dao.faceById(id)?.let(::anchor)
+                                ?: dao.membershipById(id)?.anchor?.takeIf { it.isNotBlank() }
+                        }
+                        .distinct()
+                val affectedFaces =
+                    (primaryFaces +
+                            anchors.flatMap { key ->
+                                dao.membershipsByAnchor(key).map { it.faceId }
+                            })
+                        .distinct()
                 val root = JSONObject()
+                root.put(
+                    "anchorStates",
+                    JSONArray(
+                        anchors.map { key ->
+                            val prior =
+                                dao.membershipsByAnchor(key)
+                                    .filter { it.manual }
+                                    .distinctDecisions()
+                                    .singleOrNull()
+                            JSONObject()
+                                .put("key", key)
+                                .put("prior", prior?.let(::membershipJson) ?: JSONObject.NULL)
+                        }
+                    ),
+                )
                 root.put(
                     "members",
                     JSONArray(
@@ -401,14 +469,8 @@ class GalleryRepository(
                                 .put("key", key)
                                 .put(
                                     "old",
-                                    dao.membershipById(key)?.let {
-                                        JSONObject()
-                                            .put("person", it.personId)
-                                            .put("manual", it.manual)
-                                            .put("dismissed", it.dismissed)
-                                            .put("confident", it.confident)
-                                            .put("anchor", it.anchor)
-                                    } ?: JSONObject.NULL,
+                                    dao.membershipById(key)?.let(::membershipJson)
+                                        ?: JSONObject.NULL,
                                 )
                         }
                     ),
@@ -470,6 +532,23 @@ class GalleryRepository(
                             )
                         }
                     }
+                for (key in anchors) {
+                    // The explicitly acted-on face wins over its obsolete detector aliases.
+                    val explicit =
+                        faces
+                            .mapNotNull { dao.membershipById(it) }
+                            .filter { it.manual && it.anchor == key }
+                    val candidates =
+                        if (explicit.isNotEmpty()) explicit
+                        else
+                            primaryFaces
+                                .mapNotNull { dao.membershipById(it) }
+                                .filter { it.manual && it.anchor == key }
+                    val decision = candidates.distinctDecisions().singleOrNull() ?: continue
+                    for (alias in dao.membershipsByAnchor(key)) {
+                        dao.membership(decision.copy(faceId = alias.faceId))
+                    }
+                }
                 dao.undo(Undo(description = description, payload = root.toString()))
                 dao.trimUndo()
                 affectedSearch(affectedFaces, people, overrides.map { it.first })
@@ -489,7 +568,7 @@ class GalleryRepository(
 
     suspend fun assign(faceId: String, target: String?, name: String = "New person") {
         val id = target ?: UUID.randomUUID().toString()
-        correct("Assign face", faces = listOf(faceId), people = listOf(id)) {
+        correct("Assign face", faces = listOf(faceId), people = listOf(id), confirmPeople = true) {
             val p = dao.personById(id) ?: Person(id, name.trim().take(80).ifBlank { "New person" })
             dao.person(p.copy(promoted = true))
             dao.membership(
@@ -514,7 +593,13 @@ class GalleryRepository(
     suspend fun split(faceIds: List<String>, oldId: String) {
         val id = UUID.randomUUID().toString()
         val n = negative("p:$id", "p:$oldId")
-        correct("Split person", faces = faceIds, people = listOf(id), negatives = listOf(n)) {
+        correct(
+            "Split person",
+            faces = faceIds,
+            people = listOf(id, oldId),
+            negatives = listOf(n),
+            confirmPeople = true,
+        ) {
             dao.person(Person(id, promoted = true))
             faceIds.forEach {
                 dao.membership(
@@ -537,8 +622,9 @@ class GalleryRepository(
         correct(
             "Remove face from person",
             faces = listOf(faceId),
-            people = listOf(id),
+            people = listOf(id, oldId),
             negatives = listOf(n),
+            confirmPeople = true,
         ) {
             dao.person(Person(id))
             dao.membership(
@@ -557,7 +643,12 @@ class GalleryRepository(
     suspend fun reject(faceId: String, personId: String) {
         val n = negative("f:$faceId", "p:$personId")
         val persistent = dao.faceById(faceId)?.let { negative("a:${anchor(it)}", "p:$personId") }
-        correct("Reject suggestion", negatives = listOfNotNull(n, persistent)) {
+        correct(
+            "Reject suggestion",
+            people = listOf(personId),
+            negatives = listOfNotNull(n, persistent),
+            confirmPeople = true,
+        ) {
             dao.negative(n)
             if (persistent != null) dao.negative(persistent)
         }
@@ -565,7 +656,14 @@ class GalleryRepository(
 
     suspend fun different(a: String, b: String) {
         val n = negative("p:$a", "p:$b")
-        correct("Mark different people", negatives = listOf(n)) { dao.negative(n) }
+        correct(
+            "Mark different people",
+            people = listOf(a, b),
+            negatives = listOf(n),
+            confirmPeople = true,
+        ) {
+            dao.negative(n)
+        }
     }
 
     suspend fun merge(source: String, target: String) {
@@ -589,6 +687,7 @@ class GalleryRepository(
             faces = members.map { it.faceId },
             people = listOf(target),
             negatives = inherited,
+            confirmPeople = true,
         ) {
             members.forEach {
                 dao.membership(it.copy(personId = target, manual = true, confident = true))
@@ -622,6 +721,9 @@ class GalleryRepository(
             db.withTransaction {
                 val entry = dao.lastUndo() ?: return@withTransaction
                 val root = JSONObject(entry.payload)
+                val anchorStates =
+                    root.optJSONArray("anchorStates")
+                        ?: legacyUndoAnchorStates(root.getJSONArray("members"))
                 val fs = mutableListOf<String>()
                 val ps = mutableListOf<String>()
                 val ms = mutableListOf<String>()
@@ -644,16 +746,26 @@ class GalleryRepository(
                     if (o.isNull("old")) dao.deleteMembership(k)
                     else {
                         val v = o.getJSONObject("old")
-                        dao.membership(
-                            Membership(
-                                k,
-                                v.getString("person"),
-                                v.getBoolean("manual"),
-                                v.getBoolean("dismissed"),
-                                v.getBoolean("confident"),
-                                v.optString("anchor", ""),
+                        dao.membership(membershipFromJson(k, v))
+                    }
+                }
+                // Analysis may have made new aliases since the correction was journaled.
+                // Restore the prior anchor decision for those too, or return them to matching.
+                val regroup = mutableListOf<String>()
+                val snapshotted = fs.toSet()
+                for (i in 0 until anchorStates.length()) {
+                    val state = anchorStates.getJSONObject(i)
+                    for (alias in dao.membershipsByAnchor(state.getString("key"))) {
+                        if (alias.faceId in snapshotted) continue
+                        fs += alias.faceId
+                        if (!state.isNull("prior")) {
+                            dao.membership(
+                                membershipFromJson(alias.faceId, state.getJSONObject("prior"))
                             )
-                        )
+                        } else {
+                            dao.deleteMembership(alias.faceId)
+                            regroup += alias.faceId
+                        }
                     }
                 }
                 val negatives = root.getJSONArray("negatives")
@@ -671,10 +783,40 @@ class GalleryRepository(
                     if (o.isNull("old")) dao.deleteOverride(id, l)
                     else dao.overrideLabel(LabelOverride(id, l, o.getBoolean("old")))
                 }
+                regroup.forEach { id -> dao.faceById(id)?.let { group(it) } }
                 dao.deleteUndo(entry.id)
                 affectedSearch(fs, ps, ms)
             }
         }
+
+    /** Older journals saved face keys; recover their anchor scope before restoring those keys. */
+    private suspend fun legacyUndoAnchorStates(members: JSONArray): JSONArray {
+        val states = mutableMapOf<String, MutableList<Membership>>()
+        for (i in 0 until members.length()) {
+            val row = members.getJSONObject(i)
+            val id = row.getString("key")
+            val prior =
+                if (row.isNull("old")) null else membershipFromJson(id, row.getJSONObject("old"))
+            val key =
+                prior?.anchor?.takeIf { it.isNotBlank() }
+                    ?: dao.membershipById(id)?.anchor?.takeIf { it.isNotBlank() }
+                    ?: dao.faceById(id)?.let(::anchor)
+                    ?: continue
+            val choices = states.getOrPut(key) { mutableListOf() }
+            if (prior?.manual == true) choices += prior
+        }
+        return JSONArray(
+            states.map { (key, choices) ->
+                JSONObject()
+                    .put("key", key)
+                    .put(
+                        "prior",
+                        choices.distinctDecisions().singleOrNull()?.let(::membershipJson)
+                            ?: JSONObject.NULL,
+                    )
+            }
+        )
+    }
 
     private suspend fun affectedSearch(
         faces: List<String>,
@@ -703,14 +845,21 @@ class GalleryRepository(
             }
         }
 
-    suspend fun reindex() =
+    suspend fun reindex() {
+        preserveLegacyPeopleDecisions()
         gate.withLock {
+            // In-flight decodes must not restore an older video checkpoint over the new queue.
+            settings.generation++
             db.withTransaction {
+                // Rebuild machine groups, including groups fragmented by older comparison caps.
+                // Confirmed memberships and negative constraints survive this analysis reset.
+                dao.clearAutomaticMemberships()
                 for (item in dao.accessibleMedia()) if (item.hash.isBlank())
                     dao.stage(Stage(item.id, "0hash"))
                 else enqueueAnalysis(item)
             }
         }
+    }
 
     suspend fun reset() =
         gate.withLock {
@@ -732,6 +881,29 @@ class GalleryRepository(
     companion object {
         val gate = Mutex()
         private val reconcileGate = Mutex()
+
+        private fun List<Membership>.distinctDecisions() = distinctBy {
+            it.copy(faceId = "", anchor = "")
+        }
+
+        private fun membershipJson(member: Membership) =
+            JSONObject()
+                .put("person", member.personId)
+                .put("manual", member.manual)
+                .put("dismissed", member.dismissed)
+                .put("confident", member.confident)
+                .put("anchor", member.anchor)
+
+        private fun membershipFromJson(id: String, value: JSONObject) =
+            Membership(
+                id,
+                value.getString("person"),
+                value.getBoolean("manual"),
+                value.getBoolean("dismissed"),
+                value.getBoolean("confident"),
+                value.optString("anchor", ""),
+            )
+
         const val CONTENT_VERSION = "mlkit-label17.0.9-ocr16.0.1-rules1"
 
         fun videoVersion(thorough: Boolean) =
@@ -751,6 +923,8 @@ class GalleryRepository(
 
         fun negative(a: String, b: String) = pair(a, b).let { Negative(it.first, it.second) }
 
-        fun anchor(face: Face) = "${face.hash}:${face.timestamp}:${face.location}"
+        fun anchor(face: Face) =
+            if (face.hash.isBlank() || face.location.isBlank()) "face:${face.id}"
+            else "${face.hash}:${face.timestamp}:${face.location}"
     }
 }

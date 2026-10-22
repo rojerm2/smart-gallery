@@ -20,6 +20,298 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class PersistenceTest {
     @Test
+    fun earlierUndoJournalAlsoReleasesAliasesCreatedAfterTheCorrection() = runBlocking {
+        val db = Room.inMemoryDatabaseBuilder(context, GalleryDatabase::class.java).build()
+        try {
+            val repo = GalleryRepository(context, db)
+            fixture(repo, "a")
+            repo.assign("fa", null, "Earlier saved correction")
+            val assigned = repo.dao.membershipById("fa")!!.personId
+            val entry = repo.dao.lastUndo()!!
+            val legacy = org.json.JSONObject(entry.payload).apply { remove("anchorStates") }
+            repo.dao.deleteUndo(entry.id)
+            repo.dao.undo(entry.copy(id = 0, payload = legacy.toString()))
+            repo.purgeDerived("a")
+            val rediscovered = face("new-face", "a", model = "new-version")
+            repo.dao.face(rediscovered)
+            repo.group(rediscovered)
+            assertEquals(assigned, repo.dao.membershipById(rediscovered.id)!!.personId)
+            repo.undo()
+            assertFalse(repo.dao.membershipById(rediscovered.id)!!.manual)
+            assertNotEquals(assigned, repo.dao.membershipById(rediscovered.id)!!.personId)
+            assertNull(repo.dao.personById(assigned))
+        } finally {
+            db.close()
+        }
+    }
+
+    @Test
+    fun missingGeometryCannotTransferAConfirmedIdentityToAnotherFaceInThePhoto() = runBlocking {
+        val db = Room.inMemoryDatabaseBuilder(context, GalleryDatabase::class.java).build()
+        try {
+            val repo = GalleryRepository(context, db)
+            repo.dao.media(media("shared"))
+            val first = face("first", "shared").copy(location = "")
+            repo.dao.face(first)
+            repo.group(first)
+            val person = repo.dao.membershipById(first.id)!!.personId
+            repo.promote(person)
+            val second = face("second", "shared").copy(location = "", embedding = vector(0f, 1f))
+            repo.dao.face(second)
+            repo.group(second)
+            assertNotEquals(person, repo.dao.membershipById(second.id)!!.personId)
+            assertFalse(repo.dao.membershipById(second.id)!!.manual)
+            assertNotEquals(GalleryRepository.anchor(first), GalleryRepository.anchor(second))
+        } finally {
+            db.close()
+        }
+    }
+
+    @Test
+    fun correctingRediscoveredFaceUpdatesOldAliasesAndUndoAlsoRestoresFutureAliases() =
+        runBlocking {
+            val db = Room.inMemoryDatabaseBuilder(context, GalleryDatabase::class.java).build()
+            try {
+                val repo = GalleryRepository(context, db)
+                fixture(repo, "original")
+                repo.assign("foriginal", null, "First choice")
+                val first = repo.dao.membershipById("foriginal")!!.personId
+                suspend fun rediscover(id: String): Face {
+                    repo.purgeDerived("original")
+                    val f = face(id, "original", model = "version-$id")
+                    repo.dao.face(f)
+                    repo.group(f)
+                    return f
+                }
+                val alias = rediscover("alias")
+                assertEquals(first, repo.dao.membershipById(alias.id)!!.personId)
+                repo.assign(alias.id, null, "Corrected choice")
+                val corrected = repo.dao.membershipById(alias.id)!!.personId
+                assertNotEquals(first, corrected)
+                assertEquals(corrected, repo.dao.membershipById("foriginal")!!.personId)
+                val future = rediscover("future")
+                assertEquals(corrected, repo.dao.membershipById(future.id)!!.personId)
+                repo.undo()
+                assertEquals(first, repo.dao.membershipById(future.id)!!.personId)
+                assertEquals(first, repo.dao.membershipById("foriginal")!!.personId)
+                assertEquals(first, repo.dao.membershipById(rediscover("after-undo").id)!!.personId)
+                assertNull(repo.dao.personById(corrected))
+                repo.undo()
+                assertTrue(repo.dao.memberships().none { it.manual })
+                assertNull(repo.dao.personById(first))
+            } finally {
+                db.close()
+            }
+        }
+
+    @Test
+    fun contradictoryLegacyAliasesStayInReviewUntilExplicitlyResolved() = runBlocking {
+        val db = Room.inMemoryDatabaseBuilder(context, GalleryDatabase::class.java).build()
+        try {
+            val repo = GalleryRepository(context, db)
+            fixture(repo, "original")
+            val f = repo.dao.faceById("foriginal")!!
+            val anchor = GalleryRepository.anchor(f)
+            for (id in listOf("first", "second")) {
+                repo.dao.person(Person(id))
+                repo.dao.membership(
+                    Membership("old-$id", id, manual = true, confident = true, anchor = anchor)
+                )
+            }
+            val rediscovered = f.copy(id = "rediscovered", model = "new-version")
+            repo.dao.face(rediscovered)
+            repo.group(rediscovered)
+            val unresolved = repo.dao.membershipById(rediscovered.id)!!
+            assertFalse(unresolved.manual)
+            assertFalse(unresolved.confident)
+            assertTrue(unresolved.personId !in listOf("first", "second"))
+            repo.assign(rediscovered.id, "first")
+            assertTrue(
+                repo.dao.membershipsByAnchor(anchor).all { it.personId == "first" && it.manual }
+            )
+            val future = rediscovered.copy(id = "future")
+            repo.dao.face(future)
+            repo.group(future)
+            assertEquals("first", repo.dao.membershipById(future.id)!!.personId)
+            repo.undo()
+            assertEquals("first", repo.dao.membershipById("old-first")!!.personId)
+            assertEquals("second", repo.dao.membershipById("old-second")!!.personId)
+            assertFalse(repo.dao.membershipById(future.id)!!.manual)
+            assertFalse(repo.dao.membershipById(future.id)!!.confident)
+        } finally {
+            db.close()
+        }
+    }
+
+    @Test
+    fun rejectedTargetIdentitySurvivesRegenerationAndUndoReleasesConfirmation() = runBlocking {
+        val db = Room.inMemoryDatabaseBuilder(context, GalleryDatabase::class.java).build()
+        try {
+            val repo = GalleryRepository(context, db)
+            fixture(repo, "target")
+            val person = repo.dao.membershipById("ftarget")!!.personId
+            repo.dao.media(media("source"))
+            val source = face("source-face", "source")
+            repo.dao.face(source)
+            repo.reject(source.id, person)
+            assertTrue(repo.dao.membershipById("ftarget")!!.manual)
+            repo.undo()
+            assertFalse(repo.dao.membershipById("ftarget")!!.manual)
+            repo.reject(source.id, person)
+            repo.purgeDerived("target")
+            val target = face("new-target-id", "target", model = "new-version")
+            repo.dao.face(target)
+            repo.group(target)
+            assertEquals(person, repo.dao.membershipById(target.id)!!.personId)
+            val updatedSource = source.copy(model = "new-version")
+            repo.dao.face(updatedSource)
+            assertTrue(repo.suggestions(updatedSource).none { it.first.id == person })
+            repo.reindex()
+            repo.group(updatedSource)
+            assertNotEquals(person, repo.dao.membershipById(source.id)!!.personId)
+        } finally {
+            db.close()
+        }
+    }
+
+    @Test
+    fun differentAndSplitKeepBothReferencedIdentitiesAcrossNewFaceIds() = runBlocking {
+        for (split in listOf(false, true)) {
+            val db = Room.inMemoryDatabaseBuilder(context, GalleryDatabase::class.java).build()
+            try {
+                val repo = GalleryRepository(context, db)
+                fixture(repo, "a")
+                fixture(repo, "b")
+                val first = repo.dao.membershipById("fa")!!.personId
+                if (split) repo.split(listOf("fb"), first)
+                else {
+                    val other = Person("other")
+                    repo.dao.person(other)
+                    repo.dao.membership(repo.dao.membershipById("fb")!!.copy(personId = other.id))
+                    repo.different(first, other.id)
+                }
+                val second = repo.dao.membershipById("fb")!!.personId
+                assertNotEquals(first, second)
+                for ((media, expected) in listOf("a" to first, "b" to second)) {
+                    repo.purgeDerived(media)
+                    val regenerated = face("new-$media", media, model = "new-version")
+                    repo.dao.face(regenerated)
+                    repo.group(regenerated)
+                    assertEquals(expected, repo.dao.membershipById(regenerated.id)!!.personId)
+                }
+                assertTrue(
+                    repo.suggestions(repo.dao.faceById("new-a")!!).none { it.first.id == second }
+                )
+                repo.undo()
+                assertTrue(repo.dao.negatives().isEmpty())
+            } finally {
+                db.close()
+            }
+        }
+    }
+
+    @Test
+    fun legacyNegativeTargetIsPinnedEvenAfterTheEarlierNameUpgradeAlreadyRan() = runBlocking {
+        val key = "legacy-negative-${UUID.randomUUID()}"
+        val isolated =
+            object : ContextWrapper(context) {
+                override fun getSharedPreferences(name: String, mode: Int): SharedPreferences =
+                    super.getSharedPreferences("$key-$name", mode)
+            }
+        val db = Room.inMemoryDatabaseBuilder(isolated, GalleryDatabase::class.java).build()
+        try {
+            val repo = GalleryRepository(isolated, db)
+            fixture(repo, "a")
+            val target = repo.dao.membershipById("fa")!!.personId
+            repo.settings.legacyPeopleConfirmed = true
+            repo.dao.negative(GalleryRepository.negative("a:old-source", "p:$target"))
+            repo.preserveLegacyPeopleDecisions()
+            assertTrue(repo.dao.membershipById("fa")!!.manual)
+            fixture(repo, "later")
+            assertFalse(repo.dao.membershipById("flater")!!.manual)
+            repo.preserveLegacyPeopleDecisions()
+            assertFalse(repo.dao.membershipById("flater")!!.manual)
+            repo.purgeDerived("a")
+            val regenerated = face("new-a", "a", model = "new-version")
+            repo.dao.face(regenerated)
+            repo.group(regenerated)
+            assertEquals(target, repo.dao.membershipById(regenerated.id)!!.personId)
+        } finally {
+            db.close()
+            context.deleteSharedPreferences("$key-settings")
+        }
+    }
+
+    @Test
+    fun longVideoFacesStayTogetherAndAnotherPhotoProvidesSecondSupport() = runBlocking {
+        val db = Room.inMemoryDatabaseBuilder(context, GalleryDatabase::class.java).build()
+        try {
+            val repo = GalleryRepository(context, db)
+            repo.dao.media(media("video").copy(mime = "video/mp4", duration = 600_000))
+            repeat(130) { frame ->
+                val f = face("frame-$frame", "video").copy(timestamp = frame * 4000L)
+                repo.dao.face(f)
+                repo.group(f)
+            }
+            val card = repo.dao.peopleCards().first().single()
+            assertEquals(1, card.support)
+            assertEquals(1, card.count)
+            assertFalse(card.promoted)
+            fixture(repo, "another-photo")
+            val supported = repo.dao.peopleCards().first().single()
+            assertEquals(card.id, supported.id)
+            assertEquals(2, supported.support)
+            assertEquals(2, supported.count)
+            repo.reindex()
+            assertTrue(repo.dao.memberships().isEmpty())
+            for (item in listOf("video", "another-photo")) {
+                for (f in repo.dao.facesForMedia(item)) repo.group(f)
+            }
+            assertEquals(2, repo.dao.peopleCards().first().single().support)
+        } finally {
+            db.close()
+        }
+    }
+
+    @Test
+    fun completeLinkAndAmbiguityIncludeMembersBeyondTheFirstDatabasePage() = runBlocking {
+        val db = Room.inMemoryDatabaseBuilder(context, GalleryDatabase::class.java).build()
+        try {
+            val repo = GalleryRepository(context, db)
+            repo.dao.media(media("many"))
+            repo.dao.person(Person("large-group"))
+            repeat(65) { index ->
+                val f = face("a-%03d".format(index), "many")
+                repo.dao.face(f)
+                repo.dao.membership(Membership(f.id, "large-group", confident = true))
+            }
+            val last = face("z-last", "many").copy(embedding = vector(0f, 1f))
+            repo.dao.face(last)
+            repo.dao.membership(Membership(last.id, "large-group", confident = true))
+            repo.dao.media(media("new"))
+            val candidate = face("candidate", "new")
+            repo.dao.face(candidate)
+            repo.group(candidate)
+            assertNotEquals("large-group", repo.dao.membershipById(candidate.id)!!.personId)
+            assertTrue(repo.suggestions(candidate).none { it.first.id == "large-group" })
+
+            // A lower score on a later page must also contribute to the runner-up margin.
+            repo.dao.face(last.copy(embedding = vector(.89f, .4559605f)))
+            repo.dao.person(Person("rival"))
+            val rival = face("rival-face", "many").copy(embedding = vector(.82f, .5723635f))
+            repo.dao.face(rival)
+            repo.dao.membership(Membership(rival.id, "rival", confident = true))
+            repo.dao.deleteMembership(candidate.id)
+            repo.group(candidate)
+            val assigned = repo.dao.membershipById(candidate.id)!!.personId
+            assertNotEquals("large-group", assigned)
+            assertNotEquals("rival", assigned)
+        } finally {
+            db.close()
+        }
+    }
+
+    @Test
     fun legacyNamedGroupsAreUpgradedOnceWithoutPinningLaterAutomaticAdditions() = runBlocking {
         val key = "legacy-${UUID.randomUUID()}"
         val isolated =
@@ -100,7 +392,9 @@ class PersistenceTest {
             val repo = GalleryRepository(context, db)
             fixture(repo, "shared")
             val first = repo.dao.membershipById("fshared")!!.personId
-            val secondFace = face("second-face", "shared").copy(embedding = vector(0f, 1f))
+            val secondFace =
+                face("second-face", "shared")
+                    .copy(embedding = vector(0f, 1f), location = "55-10-30-40")
             repo.dao.face(secondFace)
             repo.group(secondFace)
             val second = repo.dao.membershipById(secondFace.id)!!.personId
@@ -199,7 +493,7 @@ class PersistenceTest {
         media: String,
         hash: String = media,
         model: String = FaceEmbedder.VERSION,
-    ) = Face(id, media, hash, 0, vector(), model, 100.0, "$id.jpg")
+    ) = Face(id, media, hash, 0, vector(), model, 100.0, "$id.jpg", location = "10-10-30-40")
 
     private suspend fun fixture(repo: GalleryRepository, id: String, hash: String = id) {
         repo.dao.media(media(id, hash))
@@ -325,6 +619,7 @@ class PersistenceTest {
             repo.reject(f.id, person)
             repo.group(f)
             repo.reindex()
+            repo.group(f)
             assertNotEquals(person, repo.dao.membershipById("fb")!!.personId)
             assertTrue(repo.suggestions(f).none { it.first.id == person })
         } finally {
