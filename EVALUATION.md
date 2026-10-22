@@ -65,3 +65,18 @@ The normal instrumentation suite skips this host-dependent test and never signal
 The host explicitly starts recovery work. This check does not prove automatic WorkManager/OS
 rescheduling, reboot recovery, charging constraints, airplane-first-launch behavior or Redmi/HyperOS
 acceptance. It does not grant gallery permissions, reset existing app data or use private media.
+
+## Normal device suite and observed OPPO freezing
+
+On Windows, install matching debug app and test APKs, then run the normal suite with:
+
+```powershell
+.\tools\run-device-tests.ps1 -Adb "$env:ANDROID_HOME/platform-tools/adb.exe" -Serial YOUR_SERIAL -LogDirectory .ai/device-tests
+```
+
+On the available OPPO, a live instrumentation process was observed waiting in the kernel
+`__refrigerator` channel. Foregrounding Smart Gallery thawed that same PID and its existing suite
+continued to completion. This helper detects that specific state and foregrounds the existing
+app; it does not restart tests merely because an observation takes a long time. Logs retain
+skips separately from passes. It does not change system power settings or prove background
+reliability on ColorOS/HyperOS; manufacturer background and resource acceptance remain separate.

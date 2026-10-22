@@ -46,6 +46,12 @@ class GallerySettings(context: Context) {
             prefs.edit().putBoolean("thorough", v).commit()
         }
 
+    internal var legacyPeopleConfirmed: Boolean
+        get() = prefs.getBoolean("legacyPeopleConfirmed-v1", false)
+        set(v) {
+            prefs.edit().putBoolean("legacyPeopleConfirmed-v1", v).commit()
+        }
+
     var generation: Long
         get() = prefs.getLong("generation", 0)
         set(v) {
@@ -126,6 +132,7 @@ class GalleryRepository(
     suspend fun reconcile() =
         reconcileGate.withLock {
             withContext(Dispatchers.IO) {
+                preserveLegacyPeopleDecisions()
                 val generation = settings.generation
                 val token = UUID.randomUUID().toString()
                 val exclusions = dao.exclusionList()
@@ -241,6 +248,28 @@ class GalleryRepository(
             }
         }
 
+    /** Upgrade older named/promoted groups once, without pinning later machine additions. */
+    internal suspend fun preserveLegacyPeopleDecisions() {
+        if (settings.legacyPeopleConfirmed) return
+        gate.withLock {
+            if (settings.legacyPeopleConfirmed) return@withLock
+            db.withTransaction {
+                for (person in dao.allPeople()) {
+                    if (!person.promoted && person.name == Person("").name) continue
+                    for (member in dao.membershipsForPerson(person.id)) {
+                        dao.membership(
+                            member.copy(
+                                manual = true,
+                                anchor = dao.faceById(member.faceId)?.let(::anchor) ?: member.anchor,
+                            )
+                        )
+                    }
+                }
+            }
+            settings.legacyPeopleConfirmed = true
+        }
+    }
+
     suspend fun enqueueAnalysis(item: Media) {
         dao.analyzed(item.id, false)
         if (item.video)
@@ -323,11 +352,13 @@ class GalleryRepository(
     suspend fun suggestions(face: Face): List<Pair<Person, Float>> {
         val constraints = dao.negatives()
         val current = dao.membershipById(face.id)?.personId
+        val persistentAnchor = anchor(face)
         return dao.allPeople()
             .filter { p ->
                 p.id != current &&
                     constraints.none {
                         pair(it.a, it.b) == pair("f:${face.id}", "p:${p.id}") ||
+                            pair(it.a, it.b) == pair("a:$persistentAnchor", "p:${p.id}") ||
                             (current != null && pair(it.a, it.b) == pair("p:$current", "p:${p.id}"))
                     }
             }
@@ -348,15 +379,24 @@ class GalleryRepository(
         people: List<String> = emptyList(),
         negatives: List<Negative> = emptyList(),
         overrides: List<Pair<String, String>> = emptyList(),
+        confirmPeople: Boolean = false,
         action: suspend () -> Unit,
     ) =
         gate.withLock {
             db.withTransaction {
+                val affectedFaces =
+                    (faces +
+                            if (confirmPeople)
+                                people.flatMap { id ->
+                                    dao.membershipsForPerson(id).map { it.faceId }
+                                }
+                            else emptyList())
+                        .distinct()
                 val root = JSONObject()
                 root.put(
                     "members",
                     JSONArray(
-                        faces.distinct().map { key ->
+                        affectedFaces.map { key ->
                             JSONObject()
                                 .put("key", key)
                                 .put(
@@ -418,20 +458,32 @@ class GalleryRepository(
                     ),
                 )
                 action()
+                if (confirmPeople)
+                    for (id in people) {
+                        for (member in dao.membershipsForPerson(id)) {
+                            dao.membership(
+                                member.copy(
+                                    manual = true,
+                                    anchor =
+                                        dao.faceById(member.faceId)?.let(::anchor) ?: member.anchor,
+                                )
+                            )
+                        }
+                    }
                 dao.undo(Undo(description = description, payload = root.toString()))
                 dao.trimUndo()
-                affectedSearch(faces, people, overrides.map { it.first })
+                affectedSearch(affectedFaces, people, overrides.map { it.first })
             }
         }
 
     suspend fun rename(id: String, name: String) =
-        correct("Rename person", people = listOf(id)) {
+        correct("Rename person", people = listOf(id), confirmPeople = true) {
             val p = dao.personById(id) ?: return@correct
             dao.person(p.copy(name = name.trim().take(80).ifBlank { "Unnamed person" }))
         }
 
     suspend fun promote(id: String) =
-        correct("Promote person", people = listOf(id)) {
+        correct("Promote person", people = listOf(id), confirmPeople = true) {
             dao.personById(id)?.let { dao.person(it.copy(promoted = true)) }
         }
 
