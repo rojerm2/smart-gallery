@@ -8,7 +8,9 @@ android {
     namespace = "dev.smartgallery"
     compileSdk = 37
     defaultConfig {
-        applicationId = "dev.smartgallery"
+        val validation = providers.gradleProperty("deviceValidation").orNull == "true"
+        applicationId = if (validation) "dev.smartgallery.validation" else "dev.smartgallery"
+        manifestPlaceholders["appLabel"] = if (validation) "Smart Gallery Validation" else "Smart Gallery"
         minSdk = 28
         targetSdk = 37
         versionCode = 1

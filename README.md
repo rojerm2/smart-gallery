@@ -15,6 +15,7 @@ accuracy, battery and target Redmi/HyperOS acceptance are not established by the
   merging, splitting, removal, negative constraints, dismissing and recent-correction undo.
 - Versioned, normalized MobileFaceNet embeddings from aligned faces. Tiny, blurred or extreme-pose
   faces and missing landmarks are filtered. Higher-resolution source-region retries do not invent detail.
+  Duplicate detector hypotheses are suppressed only when their overlapping physical landmarks agree.
 - Bundled image labeling and OCR. Conservative visual/text rules for broad documents, receipts
   and IDs; manual category overrides. A Dog category does not recognize an individual pet.
 - Combined local search: `Dog 2026-10`, `Alice Camera`, or `"total PHP"`. All terms must match;
@@ -74,6 +75,10 @@ $env:ANDROID_SERIAL = 'YOUR_SERIAL'
 .\gradlew.bat connectedDebugAndroidTest
 ```
 
+Fixture tests that browse or reconcile media require the target app to have no shared-gallery
+permission. If your personal installation has access, use the separate validation installation
+documented in [EVALUATION.md](EVALUATION.md); it preserves the personal app's permissions and data.
+
 Keep the same private debug keystore for subsequent updates. Another machine's debug signature
 usually cannot update this installation; use a backed-up private release key for long-term use.
 Signing material and APKs are intentionally not committed.
@@ -91,6 +96,9 @@ revocation after the receiving activity finishes, using only a test-created fixt
 NASA/US Navy public-domain fixtures are in the test APK only, with attribution in the notices.
 
 The licensed two-identity micro-evaluation is a smoke check, not a held-out accuracy estimate.
+Matching configuration is versioned separately from embeddings and remains provisional after a
+small local calibration. Reindex applies the current detector/grouping rules to existing media
+while preserving explicit corrections.
 For representative local evaluation, use the optional private fixture harness described in
 [EVALUATION.md](EVALUATION.md). Private photos, labels, identities, results, crops and embeddings
 must remain outside Git. Do not publish test APKs containing private evaluation assets.
@@ -113,7 +121,9 @@ must remain outside Git. Do not publish test APKs containing private evaluation 
   universal recognition accuracy or device battery claim is made.
 - On Redmi Note 14 4G (24117RN76G), Android 16 / HyperOS 3.0.302.0, bundled inference and
   persistence tests passed during a first-launch airplane-mode run. Abrupt process recovery also
-  passed with owned fixtures. Automated taps require HyperOS's USB debugging security setting;
+  passed with owned fixtures. Photo zoom/details, video playback, denied-access navigation and
+  missing-photo viewer recovery also passed using a separate fixture-only installation.
+  Automated taps require HyperOS's USB debugging security setting;
   modern selected/revoked access, reboot, background policy and resource checks remain pending.
 
 Application code is Apache-2.0; third-party SDKs and model weights retain their separate terms.

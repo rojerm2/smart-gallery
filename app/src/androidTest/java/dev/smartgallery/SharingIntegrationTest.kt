@@ -32,6 +32,7 @@ class SharingIntegrationTest {
         assumeTrue(Build.VERSION.SDK_INT >= 29)
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext
+        requireFixtureOnlyGalleryAccess(context)
         val bytes = instrumentation.context.assets.open("astronaut.png").use { it.readBytes() }
         val name = "share-${UUID.randomUUID()}.png"
         val uri =
@@ -64,7 +65,9 @@ class SharingIntegrationTest {
                     bytes.size.toLong(),
                 )
             val receiverUid =
-                context.packageManager.getApplicationInfo("dev.smartgallery.test", 0).uid
+                context.packageManager
+                    .getApplicationInfo(instrumentation.context.packageName, 0)
+                    .uid
             assertNotEquals(context.applicationInfo.uid, receiverUid)
             ActivityScenario.launch(MainActivity::class.java).use {
                 for (grant in listOf(false, true, false)) {
@@ -88,7 +91,7 @@ class SharingIntegrationTest {
                         mediaShareIntent(context, media).apply {
                             component =
                                 ComponentName(
-                                    "dev.smartgallery.test",
+                                    instrumentation.context.packageName,
                                     "dev.smartgallery.ShareProbeActivity",
                                 )
                             putExtra("probeReply", reply)

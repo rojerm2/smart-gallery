@@ -2,7 +2,8 @@ param(
     [Parameter(Mandatory=$true)][string]$Adb,
     [Parameter(Mandatory=$true)][ValidatePattern('^[A-Za-z0-9._:-]+$')][string]$Serial,
     [Parameter(Mandatory=$true)][string]$TestApk,
-    [Parameter(Mandatory=$true)][string]$LogDirectory
+    [Parameter(Mandatory=$true)][string]$LogDirectory,
+    [ValidateSet('dev.smartgallery','dev.smartgallery.validation')][string]$Package = 'dev.smartgallery'
 )
 $ErrorActionPreference = 'Stop'
 $adbPath = (Resolve-Path -LiteralPath $Adb).Path
@@ -11,8 +12,8 @@ New-Item -ItemType Directory -Force -Path $LogDirectory | Out-Null
 $logRoot = (Resolve-Path -LiteralPath $LogDirectory).Path
 $run = [guid]::NewGuid().ToString()
 $testClass = 'dev.smartgallery.ProcessRecoveryTest'
-$runner = 'dev.smartgallery.test/androidx.test.runner.AndroidJUnitRunner'
-& $adbPath -s $Serial shell run-as dev.smartgallery true
+$runner = "$Package.test/androidx.test.runner.AndroidJUnitRunner"
+& $adbPath -s $Serial shell run-as $Package true
 if ($LASTEXITCODE -ne 0) { throw 'Install the matching debuggable Smart Gallery app before running this check' }
 & $adbPath -s $Serial install -r $testPath
 if ($LASTEXITCODE -ne 0) { throw 'Could not install test runner' }
@@ -24,7 +25,7 @@ try {
     $deadline = [DateTime]::UtcNow.AddSeconds(100)
     $ready = $null
     while ([DateTime]::UtcNow -lt $deadline) {
-        $marker = & $adbPath -s $Serial exec-out run-as dev.smartgallery cat "no_backup/recovery-$run/ready.json" 2>$null
+        $marker = & $adbPath -s $Serial exec-out run-as $Package cat "no_backup/recovery-$run/ready.json" 2>$null
         if ($LASTEXITCODE -eq 0) {
             try { $ready = ($marker -join "`n") | ConvertFrom-Json } catch { $ready = $null }
             if ($ready) { break }
@@ -34,9 +35,9 @@ try {
     }
     if (-not $ready) { throw "No interruptible checkpoint. See $prepareLog" }
     $appProcessId = [int]$ready.pid
-    $actualProcessId = (& $adbPath -s $Serial shell pidof dev.smartgallery).Trim()
+    $actualProcessId = (& $adbPath -s $Serial shell pidof $Package).Trim()
     if ($actualProcessId -ne "$appProcessId") { throw 'Refusing to signal a process that is not the current Smart Gallery process' }
-    & $adbPath -s $Serial shell run-as dev.smartgallery touch "no_backup/recovery-$run/interrupt.request"
+    & $adbPath -s $Serial shell run-as $Package touch "no_backup/recovery-$run/interrupt.request"
     if ($LASTEXITCODE -ne 0) { throw 'App process interruption could not be requested' }
     if (-not $prepareProcess.WaitForExit(10000)) { throw 'Interrupted instrumentation did not exit' }
     $preparation = Get-Content -LiteralPath $prepareLog -Raw
@@ -49,7 +50,7 @@ try {
     'PASS: actual app SIGKILL, new-process checkpoint resume, durable corrections and unchanged fixture.'
 } finally {
     if ($prepareProcess -and -not $prepareProcess.HasExited) {
-        & $adbPath -s $Serial shell am force-stop dev.smartgallery
+        & $adbPath -s $Serial shell am force-stop $Package
         if (-not $prepareProcess.WaitForExit(5000)) { $prepareProcess.Kill() }
     }
     # Explicit cleanup is idempotent after resume; it targets only this generated run UUID/owned URI.

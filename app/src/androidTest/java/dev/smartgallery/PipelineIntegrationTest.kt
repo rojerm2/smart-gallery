@@ -72,6 +72,7 @@ class PipelineIntegrationTest {
     fun realWorkerResumesVideoAfterDatabaseReopenAndPreservesCorrectionsOnReindex() = runBlocking {
         assumeTrue(Build.VERSION.SDK_INT >= 29)
         val instrumentation = InstrumentationRegistry.getInstrumentation()
+        requireFixtureOnlyGalleryAccess(instrumentation.targetContext)
         val context =
             IsolatedContext(instrumentation.targetContext, "pipeline-${UUID.randomUUID()}")
         val bytes =

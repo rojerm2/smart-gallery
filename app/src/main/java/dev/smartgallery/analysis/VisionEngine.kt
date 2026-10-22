@@ -11,6 +11,7 @@ import com.google.mlkit.vision.label.ImageLabeling
 import com.google.mlkit.vision.label.defaults.ImageLabelerOptions
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
+import dev.smartgallery.domain.DetectionPolicy
 import dev.smartgallery.domain.DocumentPolicy
 import dev.smartgallery.domain.QualityPolicy
 import java.nio.ByteBuffer
@@ -45,6 +46,7 @@ class VisionEngine(private val context: Context) : AutoCloseable {
 
     suspend fun faces(bitmap: Bitmap, document: Boolean): List<FaceResult> {
         val found = detector.process(InputImage.fromBitmap(bitmap, 0)).await()
+        val accepted = mutableListOf<Pair<DetectionPolicy.Region, List<DetectionPolicy.Point>>>()
         return found.take(80).mapNotNull { face ->
             val box = Rect(face.boundingBox)
             if (!box.intersect(0, 0, bitmap.width, bitmap.height)) return@mapNotNull null
@@ -65,6 +67,21 @@ class VisionEngine(private val context: Context) : AutoCloseable {
                     val mouth = landmarks.takeLast(2).sortedBy { it.x }
                     eyes + landmarks[2] + mouth
                 } else emptyList()
+            val region =
+                DetectionPolicy.Region(
+                    box.left.toFloat(),
+                    box.top.toFloat(),
+                    box.right.toFloat(),
+                    box.bottom.toFloat(),
+                )
+            val points = ordered.map { DetectionPolicy.Point(it.x, it.y) }
+            if (
+                accepted.any { (other, landmarks) ->
+                    DetectionPolicy.sameDetection(region, points, other, landmarks)
+                }
+            )
+                return@mapNotNull null
+            accepted += region to points
             val sharp = sharpness(bitmap, box)
             val quality =
                 QualityPolicy.usable(

@@ -128,6 +128,7 @@ class ViewerIntegrationTest {
         assumeTrue(Build.VERSION.SDK_INT >= 29)
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext
+        requireFixtureOnlyGalleryAccess(context)
         val name = "viewer-${UUID.randomUUID()}.${if(video)"mp4" else "png"}"
         val bytes =
             instrumentation.context.assets

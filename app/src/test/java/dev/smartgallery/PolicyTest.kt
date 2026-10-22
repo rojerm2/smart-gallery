@@ -7,6 +7,62 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class PolicyTest {
+    @Test
+    fun nestedDetectorHypothesesRequireAgreementAtEveryPhysicalLandmark() {
+        val outer = DetectionPolicy.Region(0f, 0f, 200f, 200f)
+        val inner = DetectionPolicy.Region(20f, 40f, 180f, 150f)
+        val points =
+            listOf(
+                DetectionPolicy.Point(60f, 70f),
+                DetectionPolicy.Point(140f, 70f),
+                DetectionPolicy.Point(100f, 100f),
+                DetectionPolicy.Point(65f, 130f),
+                DetectionPolicy.Point(135f, 130f),
+            )
+        assertTrue(
+            DetectionPolicy.sameDetection(
+                outer,
+                points,
+                inner,
+                points.map { it.copy(x = it.x + 1f, y = it.y - 1f) },
+            )
+        )
+        // Another face inside an overlapping box, or a scaled portrait in a collage, must survive.
+        assertFalse(
+            DetectionPolicy.sameDetection(
+                outer,
+                points,
+                inner,
+                points.map { it.copy(x = it.x + 20f) },
+            )
+        )
+        assertFalse(
+            DetectionPolicy.sameDetection(
+                outer,
+                points,
+                inner,
+                points.map { it.copy(x = it.x * .8f, y = it.y * .8f) },
+            )
+        )
+        assertFalse(DetectionPolicy.sameDetection(outer, points, inner, points.dropLast(1)))
+        assertFalse(
+            DetectionPolicy.sameDetection(
+                outer,
+                points,
+                DetectionPolicy.Region(250f, 0f, 450f, 200f),
+                points,
+            )
+        )
+        assertFalse(
+            DetectionPolicy.sameDetection(
+                outer,
+                points,
+                inner,
+                points.mapIndexed { i, p -> if (i == 4) p.copy(y = p.y + 15f) else p },
+            )
+        )
+    }
+
     private fun v(degrees: Double) =
         doubleArrayOf(cos(Math.toRadians(degrees)), sin(Math.toRadians(degrees)))
             .map { it.toFloat() }

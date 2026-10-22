@@ -27,15 +27,37 @@ Manifest structure:
 }
 ```
 
-Identity matching evaluation uses the first usable face only; use single-person images for that
-measurement. Separate detection coverage, quality exclusions, missed matches, false identity
+Identity matching evaluation requires exactly one usable face; use single-person images for that
+measurement. Multiple usable detections are unresolved rather than arbitrarily assigning a face.
+Content/document rules run before face eligibility, matching the photo worker's document-portrait
+filter. Quality and document-portrait exclusions are counted separately. Sources are decoded at
+their supplied bounded resolution; this harness does not measure MediaStore source-region retries.
+Separate detection coverage, quality exclusions, missed matches, false identity
 merges, review volume, category precision/recall and resource measurements. For multi-person
 detection, `expectedFaces` measures count coverage but does not substitute for annotated bounding
 boxes/IoU evaluation. Per-category counts are reported only over explicitly annotated labels.
+The harness also runs the production grouping repository in isolated in-memory databases using
+the manifest, reversed and seeded-shuffle orders. It reports mixed-identity groups, minority
+media within those groups, split identities, People groups and default-review media. These are
+dataset-scoped grouping results; they do not estimate an unseen library's review volume.
 
 Use `calibration` and `heldout` split values. Select thresholds from calibration only, freeze the
 configuration, then evaluate heldout data. A tiny or unrepresentative sample does not establish
 reliability. Record sampling limitations, device/OS, model/config versions and test date locally.
+Calibration reports a cutoff sweep; heldout reports only the frozen current cutoff.
+Pair reports distinguish all labeled pairs from actually compared pairs; unresolved detections
+are missed positive pairs, and are not evidence of correct negative matches. Optional instrumentation
+argument `evaluationGeometry=true` writes only anonymous item indices, detection boxes/landmarks,
+duplicate-comparison cosine scalars and reasons
+to app-private `cache/evaluation-geometry.json` for annotation QA. It writes no images, names,
+OCR or embeddings and prints no geometry to logs. Remove this test-created export after inspection.
+The default matching cutoff remains provisional after local calibration. The configuration is
+versioned independently from embeddings; reindex rebuilds automatic groups with the current
+configuration while preserving explicit decisions. A cutoff is not an accuracy percentage.
+Detector hypotheses with strongly overlapping boxes are suppressed only when all five physical
+landmarks agree within a small fraction of eye separation. This does not compare identities or
+assume that all faces in a photo are distinct. Record detector fixes discovered during evaluation
+as post-hoc fixes; repeated runs on those same photos are regression checks, not new heldout samples.
 Include relatives, children across age, different poses, low light, blur, glasses, masks, collages,
 posters, mirrors, small document portraits, animals, scenes, receipts, IDs and text screenshots.
 
@@ -68,6 +90,19 @@ acceptance. It does not grant gallery permissions, reset existing app data or us
 
 ## Normal device suite and observed OPPO freezing
 
+If the personal installation has gallery access, build a separate installation for fixture tests:
+
+```powershell
+.\gradlew.bat -PdeviceValidation=true assembleDebug assembleDebugAndroidTest
+```
+
+Install both resulting APKs. They target `dev.smartgallery.validation` and its `.test` runner,
+with the launcher label “Smart Gallery Validation”. This uses the same application code with a
+separate UID, database and permission state. Pass `-Package dev.smartgallery.validation` to both
+host helpers. Rebuild without the property for the deliverable; do not distribute the validation APK.
+Tests that reconcile MediaStore or capture gallery UI skip when the target has full or selected
+gallery access, including Android 13+ media permissions. They never revoke the personal app's grants.
+
 On Windows, install matching debug app and test APKs, then run the normal suite with:
 
 ```powershell
@@ -90,3 +125,28 @@ without a grant, read the exact original with the read grant, receive no write g
 again after the granted activity finishes. The fixture is then removed and reconciled.
 This checks Android URI access across processes without sending media to an external service.
 The receiver is absent from the production manifest; Android chooser UI navigation is separate.
+
+## OS reboot recovery
+
+`OsRecoveryTest` is an opt-in check restricted to the disposable validation installation. It
+resets only that installation's derived data, creates a repeated licensed video, and starts the
+production scheduler with charging-only enabled. Keep the phone charging. The normal suite skips it.
+The host helper has separate phases so a reboot is an explicit action on an authorized test device:
+
+```powershell
+.\tools\test-os-recovery.ps1 -Adb "$env:ANDROID_HOME/platform-tools/adb.exe" -Serial YOUR_SERIAL -LogDirectory .ai/os-recovery -Phase Prepare
+.\tools\test-os-recovery.ps1 -Adb "$env:ANDROID_HOME/platform-tools/adb.exe" -Serial YOUR_SERIAL -LogDirectory .ai/os-recovery -Phase Reboot
+# Unlock normally after boot, leaving the gallery apps closed.
+.\tools\test-os-recovery.ps1 -Adb "$env:ANDROID_HOME/platform-tools/adb.exe" -Serial YOUR_SERIAL -LogDirectory .ai/os-recovery -Phase Observe
+.\tools\test-os-recovery.ps1 -Adb "$env:ANDROID_HOME/platform-tools/adb.exe" -Serial YOUR_SERIAL -LogDirectory .ai/os-recovery -Phase Finish
+```
+
+Preparation must reach an incomplete real frame checkpoint. A framework-only Java `app_process`
+probe reads the exact owned fixture's SQLite row without constructing Application, Room,
+WorkManager or a worker. Observe requires a changed boot ID and a checkpoint beyond the value
+read immediately before reboot, plus progress between two post-boot probes, before any host
+activity/instrumentation launch. This excludes frames committed during shutdown. Finish then
+verifies persisted corrections/settings and original bytes, and cleans up the exact fixture.
+Use `-Phase Cleanup` after a failed run when the device is accessible. Logs distinguish no observed
+advancement from success. An unlock or manufacturer background setting may be needed; this does
+not promise unattended timing, battery life or recovery while credential storage is locked.

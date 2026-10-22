@@ -4,8 +4,10 @@ import kotlin.math.abs
 import kotlin.math.sqrt
 
 object IdentityPolicy {
-    const val CONFIG = "complete-link-v1-provisional"
-    const val MATCH = 0.86f
+    const val CONFIG = "complete-link-v2-local-calibration-provisional"
+    // Small calibration set: next hundredth above max different-person cosine + .02.
+    // This remains provisional; complete-link and runner-up ambiguity safeguards still apply.
+    const val MATCH = 0.76f
     const val REVIEW = 0.55f
     const val MARGIN = 0.08f
 

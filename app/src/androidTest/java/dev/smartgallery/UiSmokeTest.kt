@@ -1,8 +1,5 @@
 package dev.smartgallery
 
-import android.Manifest
-import android.content.pm.PackageManager
-import androidx.core.content.ContextCompat
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -11,7 +8,6 @@ import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.Until
 import java.io.File
 import org.junit.Assert.*
-import org.junit.Assume.assumeTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 
@@ -21,11 +17,7 @@ class UiSmokeTest {
     fun deniedAccessGalleryNavigationAndSettingsRemainUsable() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext
-        assumeTrue(
-            "Denied-access test requires no storage permission",
-            ContextCompat.checkSelfPermission(context, Manifest.permission.READ_EXTERNAL_STORAGE) !=
-                PackageManager.PERMISSION_GRANTED,
-        )
+        requireFixtureOnlyGalleryAccess(context)
         val device = UiDevice.getInstance(instrumentation)
         ActivityScenario.launch(MainActivity::class.java).use {
             assertTrue(device.wait(Until.hasObject(By.text("Smart Gallery")), 10_000))

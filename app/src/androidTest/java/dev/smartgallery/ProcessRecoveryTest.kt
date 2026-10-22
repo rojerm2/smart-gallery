@@ -87,6 +87,7 @@ class ProcessRecoveryTest {
             cleanup(context)
             return@runBlocking
         }
+        requireFixtureOnlyGalleryAccess(base)
         val db =
             Room.databaseBuilder(
                     context,
@@ -110,7 +111,7 @@ class ProcessRecoveryTest {
             // is
             // shipped.
             val video = File(context.cacheDir, "repeated.mp4")
-            val duration = repeatedVideo(context, video)
+            val duration = repeatedVideoFixture(context, video)
             val uri =
                 context.contentResolver.insert(
                     MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
@@ -298,56 +299,47 @@ class ProcessRecoveryTest {
         }
         return sha.digest().joinToString("") { "%02x".format(it) }
     }
+}
 
-    private fun repeatedVideo(context: FixtureContext, output: File): Long {
-        val seed = File(context.cacheDir, "seed.mp4")
-        InstrumentationRegistry.getInstrumentation()
-            .context
-            .assets
-            .open("later-appearance.mp4")
-            .use { input -> seed.outputStream().use { input.copyTo(it) } }
-        val extractor = MediaExtractor()
-        val muxer = MediaMuxer(output.path, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
-        try {
-            extractor.setDataSource(seed.path)
-            val track =
-                (0 until extractor.trackCount).first {
-                    extractor
-                        .getTrackFormat(it)
-                        .getString(MediaFormat.KEY_MIME)!!
-                        .startsWith("video/")
-                }
-            val format = extractor.getTrackFormat(track)
-            val durationUs = format.getLong(MediaFormat.KEY_DURATION)
-            extractor.selectTrack(track)
-            val target = muxer.addTrack(format)
-            muxer.start()
-            val buffer = ByteBuffer.allocate(2 * 1024 * 1024)
-            val info = MediaCodec.BufferInfo()
-            repeat(10) { loop ->
-                extractor.seekTo(0, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
-                while (true) {
-                    buffer.clear()
-                    val size = extractor.readSampleData(buffer, 0)
-                    if (size < 0) break
-                    require(size <= buffer.capacity())
-                    info.set(
-                        0,
-                        size,
-                        loop * durationUs + extractor.sampleTime,
-                        extractor.sampleFlags,
-                    )
-                    buffer.position(0)
-                    buffer.limit(size)
-                    muxer.writeSampleData(target, buffer, info)
-                    extractor.advance()
-                }
+internal fun repeatedVideoFixture(context: Context, output: File, repetitions: Int = 10): Long {
+    val seed = File(context.cacheDir, "seed.mp4")
+    InstrumentationRegistry.getInstrumentation().context.assets.open("later-appearance.mp4").use {
+        input ->
+        seed.outputStream().use { input.copyTo(it) }
+    }
+    val extractor = MediaExtractor()
+    val muxer = MediaMuxer(output.path, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+    try {
+        extractor.setDataSource(seed.path)
+        val track =
+            (0 until extractor.trackCount).first {
+                extractor.getTrackFormat(it).getString(MediaFormat.KEY_MIME)!!.startsWith("video/")
             }
-            muxer.stop()
-            return durationUs * 10 / 1000
-        } finally {
-            muxer.release()
-            extractor.release()
+        val format = extractor.getTrackFormat(track)
+        val durationUs = format.getLong(MediaFormat.KEY_DURATION)
+        extractor.selectTrack(track)
+        val target = muxer.addTrack(format)
+        muxer.start()
+        val buffer = ByteBuffer.allocate(2 * 1024 * 1024)
+        val info = MediaCodec.BufferInfo()
+        repeat(repetitions) { loop ->
+            extractor.seekTo(0, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
+            while (true) {
+                buffer.clear()
+                val size = extractor.readSampleData(buffer, 0)
+                if (size < 0) break
+                require(size <= buffer.capacity())
+                info.set(0, size, loop * durationUs + extractor.sampleTime, extractor.sampleFlags)
+                buffer.position(0)
+                buffer.limit(size)
+                muxer.writeSampleData(target, buffer, info)
+                extractor.advance()
+            }
         }
+        muxer.stop()
+        return durationUs * repetitions / 1000
+    } finally {
+        muxer.release()
+        extractor.release()
     }
 }
