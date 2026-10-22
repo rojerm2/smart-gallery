@@ -733,7 +733,7 @@ private fun SettingsPanel(vm: GalleryViewModel, onBack: () -> Unit, onRequestAcc
                 onClick = {
                     vm.action("Scan scheduled") {
                         vm.repo.dao.retryFailures()
-                        IndexScheduler.resume(context)
+                        IndexScheduler.resume(context, restartNow = true)
                         vm.refresh()
                     }
                 },
@@ -749,7 +749,7 @@ private fun SettingsPanel(vm: GalleryViewModel, onBack: () -> Unit, onRequestAcc
                 onClick = {
                     vm.action("Reindex scheduled; corrections preserved") {
                         vm.repo.reindex()
-                        IndexScheduler.resume(context)
+                        IndexScheduler.resume(context, restartNow = true)
                     }
                 },
                 modifier = Modifier.fillMaxWidth(),

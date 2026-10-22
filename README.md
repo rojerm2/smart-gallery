@@ -16,6 +16,7 @@ accuracy, battery and target Redmi/HyperOS acceptance are not established by the
 - Versioned, normalized MobileFaceNet embeddings from aligned faces. Tiny, blurred or extreme-pose
   faces and missing landmarks are filtered. Higher-resolution source-region retries do not invent detail.
   Duplicate detector hypotheses are suppressed only when their overlapping physical landmarks agree.
+  Source crops without enough real pixels remain excluded without failing the rest of the photo.
 - Bundled image labeling and OCR. Conservative visual/text rules for broad documents, receipts
   and IDs; manual category overrides. A Dog category does not recognize an individual pet.
 - Combined local search: `Dog 2026-10`, `Alice Camera`, or `"total PHP"`. All terms must match;

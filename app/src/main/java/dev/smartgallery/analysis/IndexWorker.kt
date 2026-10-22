@@ -31,26 +31,28 @@ object IndexScheduler {
             .setRequiresCharging(GallerySettings(context).chargingOnly)
             .build()
 
-    fun schedule(context: Context, now: Boolean = true) {
-        if (GallerySettings(context).paused) return
+    fun schedule(context: Context, now: Boolean = true, restartNow: Boolean = false): Operation? {
+        if (GallerySettings(context).paused) return null
         val work = WorkManager.getInstance(context)
-        work.enqueueUniquePeriodicWork(
-            PERIODIC,
-            ExistingPeriodicWorkPolicy.UPDATE,
-            PeriodicWorkRequestBuilder<IndexWorker>(15, TimeUnit.MINUTES)
-                .setConstraints(constraints(context))
-                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
-                .build(),
-        )
-        if (now)
+        val periodic =
+            work.enqueueUniquePeriodicWork(
+                PERIODIC,
+                ExistingPeriodicWorkPolicy.UPDATE,
+                PeriodicWorkRequestBuilder<IndexWorker>(15, TimeUnit.MINUTES)
+                    .setConstraints(constraints(context))
+                    .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
+                    .build(),
+            )
+        return if (now)
             work.enqueueUniqueWork(
                 NOW,
-                ExistingWorkPolicy.KEEP,
+                if (restartNow) ExistingWorkPolicy.REPLACE else ExistingWorkPolicy.KEEP,
                 OneTimeWorkRequestBuilder<IndexWorker>()
                     .setConstraints(constraints(context))
                     .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 10, TimeUnit.SECONDS)
                     .build(),
             )
+        else periodic
     }
 
     fun pause(context: Context) {
@@ -59,20 +61,21 @@ object IndexScheduler {
         WorkManager.getInstance(context).cancelUniqueWork(PERIODIC)
     }
 
-    fun resume(context: Context) {
+    fun resume(context: Context, restartNow: Boolean = false): Operation? {
         GallerySettings(context).paused = false
-        schedule(context)
+        return schedule(context, restartNow = restartNow)
     }
 
-    /** A normal slice continues as fresh work; retry backoff is reserved for actual deferrals. */
-    fun continueSoon(context: Context) {
-        if (GallerySettings(context).paused) return
-        WorkManager.getInstance(context)
+    /** Fresh slices isolate item retries; resource/provider deferrals use WorkManager backoff. */
+    fun continueSoon(context: Context, delaySeconds: Long = 0): Operation? {
+        if (GallerySettings(context).paused) return null
+        return WorkManager.getInstance(context)
             .enqueueUniqueWork(
                 NOW,
                 ExistingWorkPolicy.APPEND_OR_REPLACE,
                 OneTimeWorkRequestBuilder<IndexWorker>()
                     .setConstraints(constraints(context))
+                    .setInitialDelay(delaySeconds, TimeUnit.SECONDS)
                     .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 10, TimeUnit.SECONDS)
                     .build(),
             )
@@ -108,6 +111,7 @@ constructor(
                 try {
                     repo.settings.reason = "Checking accessible media"
                     repo.reconcile()
+                    repo.recoverSourceDetailFailures()
                     // Initial discovery can exceed a slice on a large library. Give inference
                     // its own budget so every continuation can actually consume the queue.
                     val start = elapsedRealtime()
@@ -368,7 +372,16 @@ constructor(
                                         )
                                     }
                                 }
-                                if (!failed) return@withContext Result.retry()
+                                if (!failed) {
+                                    // Per-item attempts are persisted separately. A fresh delayed
+                                    // slice avoids compounding global backoff across bad files.
+                                    repo.settings.reason = "Queued to retry an item"
+                                    IndexScheduler.continueSoon(
+                                        applicationContext,
+                                        delaySeconds = 10,
+                                    )
+                                    return@withContext Result.success()
+                                }
                             }
                         }
                     }

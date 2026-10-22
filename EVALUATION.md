@@ -10,6 +10,41 @@ reconciles, resets, or exports records, identifiers, OCR, embeddings or images. 
 restarts the app process, so reopen the app afterward and do not treat its elapsed time as an
 indexing benchmark. This opt-in diagnostic skips during the ordinary fixture suite.
 
+`FailedPhotoDiagnosticsTest#reproduceFailedPhotoStagesWithAggregateExceptionSitesOnly` accepts
+`-e failedPhotoDiagnostics true` on the personal debug installation. It reproduces up to eight
+failed photo stages on the phone and reports only aggregate phases, exception classes, public
+code locations and SDK error codes. Exception messages, raw stacks, media, names, URIs, OCR and
+embeddings are not exported. This diagnostic does not write analysis records or preferences;
+ordinary indexing can continue concurrently. It is not an accuracy or throughput benchmark.
+
+For an exact before/after check, pass `failureCohortRun` with a fresh UUID and
+`failureCohortMode=record`, then `replay` or `status`. References and original digests stay in
+the target app's `no_backup/failure-diagnosis/UUID.json`; only completion/digest-match counts
+leave the phone. Never pull or print that private file. Run `failureCohortMode=cleanup` with
+the same UUID afterward. A malformed cohort is rejected without attaching parser messages
+that might expose its contents. The ordinary suite uses only a synthetic malformed-input
+regression and skips the opt-in reproduction.
+
+The source-detail repair keeps the existing natural-pixel quality threshold and embedding version.
+It requeues eligible failed photo-face stages once after updating; completed work, inaccessible or
+excluded media, content/video failures and manual corrections are preserved. Later failures keep
+the normal bounded retry policy. Native regressions cover both tiny excluded crops and successful
+real source-detail recovery, plus the one-time repair's eligibility and persistence behavior.
+
+The first unpaused foreground refresh also replaces the legacy queued request once, recording
+that reset only after enqueue succeeds. Automatic refresh otherwise keeps existing work;
+explicit Scan now and reindex replace the current request while retaining Gallery database
+checkpoints. Charging, battery and storage constraints still apply. Native tests exercise an
+actual 30-minute delayed WorkManager request, default KEEP behavior and explicit replacement
+with zero initial delay and unchanged constraints.
+
+Per-item failures keep three persisted attempts but continue in fresh slices after a fixed
+10-second delay, avoiding cumulative global backoff across unrelated bad files. Resource and
+provider deferrals still use WorkManager retry/backoff. A real-worker regression retries a
+truncated public PNG to its limit, verifies fresh delayed requests, then completes a valid photo
+without changing either original fixture. Retry-state diagnostics expose only fixed job names,
+state/attempt/count aggregates, without work identifiers, payloads or timestamps.
+
 For redistributable fixtures, the optional `PrivateEvaluationTest` reads `evaluation/manifest.json`
 from test-only assets. Add a directory through `-PprivateEvalAssets=.ai/evaluation/assets`, build
 the test APK and run that class on a selected phone. This packages those assets in the ignored

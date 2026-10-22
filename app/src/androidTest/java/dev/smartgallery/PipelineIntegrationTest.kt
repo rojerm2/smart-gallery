@@ -11,14 +11,17 @@ import androidx.room.Room
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.work.ListenableWorker
+import androidx.work.WorkManager
 import androidx.work.WorkerFactory
 import androidx.work.WorkerParameters
 import androidx.work.testing.TestListenableWorkerBuilder
+import dev.smartgallery.analysis.IndexScheduler
 import dev.smartgallery.analysis.IndexWorker
 import dev.smartgallery.data.*
 import java.io.File
 import java.security.MessageDigest
 import java.util.UUID
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
@@ -94,6 +97,94 @@ class PipelineIntegrationTest {
                 }
             )
             .build()
+
+    @Test
+    fun corruptPhotoRetriesInFreshDelayedSlicesAndDoesNotBlockAGoodPhoto() = runBlocking {
+        assumeTrue(Build.VERSION.SDK_INT >= 29)
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val base = instrumentation.targetContext
+        requireFixtureOnlyGalleryAccess(base)
+        check(base.packageName == "dev.smartgallery.validation")
+        val context = IsolatedContext(base, "bad-photo-${UUID.randomUUID()}")
+        val baseSettings = GallerySettings(base)
+        val oldPaused = baseSettings.paused
+        val manager = WorkManager.getInstance(base)
+        val db = Room.inMemoryDatabaseBuilder(context, GalleryDatabase::class.java).build()
+        val uris = mutableListOf<android.net.Uri>()
+        val valid = instrumentation.context.assets.open("astronaut.png").use { it.readBytes() }
+        val corrupt = valid.take(40).toByteArray()
+        suspend fun insert(suffix: String, bytes: ByteArray): android.net.Uri {
+            val uri =
+                context.contentResolver.insert(
+                    MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                    ContentValues().apply {
+                        put(MediaStore.MediaColumns.DISPLAY_NAME, "${context.key}-$suffix.png")
+                        put(MediaStore.MediaColumns.MIME_TYPE, "image/png")
+                        put(MediaStore.MediaColumns.RELATIVE_PATH, "Pictures/SmartGalleryTests/")
+                        put(MediaStore.MediaColumns.IS_PENDING, 1)
+                    },
+                )!!
+            uris += uri
+            context.contentResolver.openOutputStream(uri)!!.use { it.write(bytes) }
+            context.contentResolver.update(
+                uri,
+                ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) },
+                null,
+                null,
+            )
+            return uri
+        }
+        try {
+            baseSettings.paused = true
+            val badUri = insert("bad", corrupt)
+            val goodUri = insert("good", valid)
+            val repo = GalleryRepository(context, db)
+            repo.settings.chargingOnly = false
+            repo.reconcile()
+            val bad = repo.dao.accessibleMedia().single { it.name == "${context.key}-bad.png" }
+            val good = repo.dao.accessibleMedia().single { it.name == "${context.key}-good.png" }
+            repeat(5) { attempt ->
+                manager.cancelUniqueWork(IndexScheduler.NOW).result.get(15, TimeUnit.SECONDS)
+                assertEquals(ListenableWorker.Result.success(), worker(context, repo).doWork())
+                if (attempt < 4) {
+                    val delayed =
+                        withTimeout(15_000) {
+                                manager.getWorkInfosForUniqueWorkFlow(IndexScheduler.NOW).first {
+                                    rows ->
+                                    rows.any {
+                                        !it.state.isFinished && it.initialDelayMillis == 10_000L
+                                    }
+                                }
+                            }
+                            .first { !it.state.isFinished && it.initialDelayMillis == 10_000L }
+                    assertEquals(0, delayed.runAttemptCount)
+                }
+            }
+            assertEquals("failed", repo.dao.stageById(bad.id, "1faces")!!.state)
+            assertEquals(3, repo.dao.stageById(bad.id, "1faces")!!.attempts)
+            assertEquals("failed", repo.dao.stageById(bad.id, "2content")!!.state)
+            assertEquals(3, repo.dao.stageById(bad.id, "2content")!!.attempts)
+            assertFalse(repo.dao.mediaById(bad.id)!!.analyzed)
+            assertTrue(
+                "A corrupt item must not indefinitely block other media",
+                repo.dao.mediaById(good.id)!!.analyzed,
+            )
+            assertArrayEquals(
+                corrupt,
+                context.contentResolver.openInputStream(badUri)!!.use { it.readBytes() },
+            )
+            assertArrayEquals(
+                valid,
+                context.contentResolver.openInputStream(goodUri)!!.use { it.readBytes() },
+            )
+        } finally {
+            manager.cancelUniqueWork(IndexScheduler.NOW).result.get(15, TimeUnit.SECONDS)
+            db.close()
+            uris.forEach { context.contentResolver.delete(it, null, null) }
+            context.cleanup()
+            baseSettings.paused = oldPaused
+        }
+    }
 
     @Test
     fun discoveryLongerThanTheSliceStillAllowsActualPhotoInference() = runBlocking {

@@ -66,7 +66,14 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
                 refreshing.value = true
                 try {
                     repo.reconcile()
-                    IndexScheduler.schedule(getApplication())
+                    // Apply a versioned repair before waiting on a previously backed-off job.
+                    repo.recoverSourceDetailFailures()
+                    val restart = !repo.settings.itemRetryQueueResetApplied && !repo.settings.paused
+                    val scheduled = IndexScheduler.schedule(getApplication(), restartNow = restart)
+                    if (restart && scheduled != null) {
+                        scheduled.result.get()
+                        repo.settings.itemRetryQueueResetApplied = true
+                    }
                 } catch (e: CancellationException) {
                     throw e
                 } catch (_: Exception) {

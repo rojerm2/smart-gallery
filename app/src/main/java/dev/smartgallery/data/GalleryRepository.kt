@@ -46,6 +46,18 @@ class GallerySettings(context: Context) {
             prefs.edit().putBoolean("thorough", v).commit()
         }
 
+    internal var sourceDetailRecoveryApplied: Boolean
+        get() = prefs.getBoolean("source-detail-recovery-v1", false)
+        set(v) {
+            prefs.edit().putBoolean("source-detail-recovery-v1", v).commit()
+        }
+
+    internal var itemRetryQueueResetApplied: Boolean
+        get() = prefs.getBoolean("item-retry-queue-reset-v1", false)
+        set(v) {
+            prefs.edit().putBoolean("item-retry-queue-reset-v1", v).commit()
+        }
+
     internal var legacyPeopleConfirmed: Boolean
         get() = prefs.getBoolean("legacyPeopleConfirmed-v1", false)
         set(v) {
@@ -242,6 +254,16 @@ class GalleryRepository(
                     }
                 }
             }
+        }
+
+    /** Retry eligible failed photo stages once after the source-detail input-size fix. */
+    internal suspend fun recoverSourceDetailFailures(): Int =
+        gate.withLock {
+            if (settings.sourceDetailRecoveryApplied) return@withLock 0
+            val recovered = db.withTransaction { dao.retryFailedPhotoStages() }
+            // After commit: interrupted migration is safe to repeat; no completed stage is reset.
+            settings.sourceDetailRecoveryApplied = true
+            recovered
         }
 
     /** Apply a bounded metadata snapshot without overwriting newer analysis or exclusions. */

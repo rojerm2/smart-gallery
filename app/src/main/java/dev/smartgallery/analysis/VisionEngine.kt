@@ -188,6 +188,13 @@ class VisionEngine(private val context: Context) : AutoCloseable {
                 decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
             }
         try {
+            // No eligible face can fit this crop at its actual decoded resolution. Keep the
+            // original exclusion rather than upscaling or sending an undersized ROI to ML Kit.
+            if (
+                region.width < QualityPolicy.MIN_FACE_EDGE ||
+                    region.height < QualityPolicy.MIN_FACE_EDGE
+            )
+                return result
             val candidates = faces(region, false)
             val best = candidates.maxByOrNull { it.quality }
             candidates.filter { it !== best }.forEach { it.crop.recycle() }

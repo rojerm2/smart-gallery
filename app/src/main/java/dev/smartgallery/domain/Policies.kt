@@ -53,6 +53,8 @@ object IdentityPolicy {
 }
 
 object QualityPolicy {
+    const val MIN_FACE_EDGE = 80
+
     // Pixel size is measured on the real decoded source, before alignment/upscaling.
     fun usable(
         width: Int,
@@ -62,8 +64,8 @@ object QualityPolicy {
         pitch: Float,
         landmarks: Int,
     ): Boolean =
-        width >= 80 &&
-            height >= 80 &&
+        width >= MIN_FACE_EDGE &&
+            height >= MIN_FACE_EDGE &&
             sharpness >= 45 &&
             abs(yaw) <= 38 &&
             abs(pitch) <= 30 &&

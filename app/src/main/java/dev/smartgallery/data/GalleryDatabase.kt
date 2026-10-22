@@ -214,6 +214,12 @@ interface GalleryDao {
     @Query("UPDATE stages SET state='pending',attempts=0,error='' WHERE state='failed'")
     suspend fun retryFailures()
 
+    @Query(
+        "UPDATE stages SET state='pending',attempts=0,error='' WHERE kind='1faces' AND state='failed' " +
+            "AND mediaId IN (SELECT id FROM media WHERE accessible=1 AND excluded=0)"
+    )
+    suspend fun retryFailedPhotoStages(): Int
+
     @Upsert suspend fun face(face: Face)
 
     @Query("SELECT * FROM faces WHERE id=:id") suspend fun faceById(id: String): Face?
