@@ -21,9 +21,11 @@ import dev.smartgallery.data.GalleryRepository
 import dev.smartgallery.data.Media
 import dev.smartgallery.domain.IdentityPolicy
 import java.io.File
+import java.io.InputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.security.MessageDigest
+import java.util.UUID
 import kotlin.random.Random
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -50,11 +52,33 @@ class PrivateEvaluationTest {
     fun evaluateAnnotatedLocalFixtures() = runBlocking {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val assets = instrumentation.context.assets
+        val privateRoot =
+            InstrumentationRegistry.getArguments().getString("privateEvalRun")?.let {
+                check(instrumentation.targetContext.packageName == "dev.smartgallery.validation")
+                val run = UUID.fromString(it).toString()
+                File(instrumentation.targetContext.noBackupFilesDir, "private-evaluation/$run")
+                    .canonicalFile
+            }
+        fun openFixture(path: String): InputStream {
+            require(path.startsWith("evaluation/") && !path.contains("..") && !path.contains('\\'))
+            if (privateRoot == null) return assets.open(path)
+            val file = File(privateRoot, path).canonicalFile
+            require(file.path.startsWith(privateRoot.path + File.separator)) {
+                "Evaluation source escaped scoped root"
+            }
+            require(file.isFile) { "Requested evaluation source is missing" }
+            return file.inputStream()
+        }
         val text =
-            runCatching {
-                    assets.open("evaluation/manifest.json").bufferedReader().use { it.readText() }
-                }
-                .getOrNull()
+            if (privateRoot != null)
+                openFixture("evaluation/manifest.json").bufferedReader().use { it.readText() }
+            else
+                runCatching {
+                        openFixture("evaluation/manifest.json").bufferedReader().use {
+                            it.readText()
+                        }
+                    }
+                    .getOrNull()
         assumeTrue(
             "No private labeled fixture set supplied; representative evaluation remains pending",
             text != null,
@@ -82,7 +106,7 @@ class PrivateEvaluationTest {
                 val item = items.getJSONObject(i)
                 val filename = item.getString("file")
                 require(filename.startsWith("evaluation/") && !filename.contains(".."))
-                val bytes = assets.open(filename).use { it.readBytes() }
+                val bytes = openFixture(filename).use { it.readBytes() }
                 val bitmap =
                     BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
                         ?: error("Evaluation image decode failed")

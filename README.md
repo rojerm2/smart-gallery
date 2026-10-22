@@ -101,7 +101,8 @@ small local calibration. Reindex applies the current detector/grouping rules to 
 while preserving explicit corrections.
 For representative local evaluation, use the optional private fixture harness described in
 [EVALUATION.md](EVALUATION.md). Private photos, labels, identities, results, crops and embeddings
-must remain outside Git. Do not publish test APKs containing private evaluation assets.
+must remain outside Git. Stage private fixtures under the validation app's private UID rather
+than packaging them in an installed APK; APK assets can be read by other apps.
 
 ## Limits and remaining acceptance
 
@@ -124,6 +125,18 @@ must remain outside Git. Do not publish test APKs containing private evaluation 
   passed with owned fixtures. Photo zoom/details, video playback, denied-access navigation and
   missing-photo viewer recovery also passed using a separate fixture-only installation.
   Automated taps require HyperOS's USB debugging security setting;
-  modern selected/revoked access, reboot, background policy and resource checks remain pending.
+  OS-only checkpoint resumption after reboot and normal unlock also passed in the validation
+  installation. This does not establish completion timing or recovery while credential storage
+  is locked. Controlled charging-only deferral/resume and severe-thermal yielding also passed
+  with owned fixtures and restored sensor reporting. These do not measure natural overheating,
+  battery life or unattended throughput. Full, selected, reselected and revoked media access
+  also passed through real system dialogs and separate-UID public fixtures. Wider library,
+  codec, low-storage and resource evaluation remains incomplete.
+
+If scanning remains queued on Xiaomi/Redmi, review Background autostart and the app's battery
+restrictions in phone Settings; labels vary by software version. Xiaomi documents these controls
+in its [autostart support guide](https://www.mi.com/global/support/faq/details/KA-507608/).
+Unlock after reboot, or reopen Smart Gallery and use Scan now. The app does not change these
+system settings automatically, and Android still controls scheduling.
 
 Application code is Apache-2.0; third-party SDKs and model weights retain their separate terms.

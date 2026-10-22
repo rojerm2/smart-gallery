@@ -3,10 +3,34 @@
 Keep fixtures and results under ignored `.ai/evaluation/` or another private directory. Use only
 consented media or clearly licensed fixtures. The app does not upload evaluation media or results.
 
-The optional `PrivateEvaluationTest` reads `evaluation/manifest.json` from test-only assets.
-Add a directory through `-PprivateEvalAssets=.ai/evaluation/assets`, build the test APK and run
-that test class on a selected phone. This packages private assets only in the ignored test APK;
-never publish that APK. The normal app APK does not include androidTest assets.
+For redistributable fixtures, the optional `PrivateEvaluationTest` reads `evaluation/manifest.json`
+from test-only assets. Add a directory through `-PprivateEvalAssets=.ai/evaluation/assets`, build
+the test APK and run that class on a selected phone. This packages those assets in the ignored
+test APK; never publish it. The normal app APK does not include androidTest assets.
+
+For private media, use the validation app's private storage instead of APK assets. Create a
+fresh UUID directory at `no_backup/private-evaluation/UUID/evaluation/` under the validation UID,
+stream the manifest and anonymous fixture files directly with `adb exec-in run-as` (no shared
+temporary files), then pass `-e privateEvalRun UUID` to this test class. File reads are confined
+to that UUID root. A supplied run with missing files fails rather than silently skipping.
+Remove those exact staged files after evaluation. Keep source/label mappings and results locally
+under ignored directories. Do not package consented private media into an installed APK.
+
+For consented photos already on the phone, `tools/test-private-folder.ps1` runs a separate opt-in
+aggregate-only diagnostic against an explicitly supplied `Pictures/.../` folder, using the personal
+app's existing media permissions. It queries that exact MediaStore relative path, samples a bounded
+number of images in ID order, and performs the photo worker's detection/source-detail retries:
+
+```powershell
+.\tools\test-private-folder.ps1 -Adb "$env:ANDROID_HOME/platform-tools/adb.exe" -Serial YOUR_SERIAL -Folder 'Pictures/ConsentedSet/' -LogDirectory .ai/consented-folder -SampleLimit 5
+```
+
+It temporarily pauses ordinary indexing and restores the prior pause preference, including an
+explicit host cleanup after a crash. It does not reconcile/reset the personal database or copy
+images off the phone. No filenames, URIs, OCR, crops or embeddings enter reports. Outputs are
+aggregate counts, elapsed time and sampled process memory/battery/thermal snapshots. Without
+ground-truth labels these are not detection recall, matching/category accuracy, battery-drain
+measurements or whole-library benchmarks. Existing folder permissions and originals are preserved.
 
 Manifest structure:
 
@@ -110,8 +134,8 @@ On Windows, install matching debug app and test APKs, then run the normal suite 
 ```
 
 On the available OPPO, a live instrumentation process was observed waiting in the kernel
-`__refrigerator` channel. Foregrounding Smart Gallery thawed that same PID and its existing suite
-continued to completion. This helper detects that specific state and foregrounds the existing
+`__refrigerator` channel. The Redmi also held a private-folder evaluation in `do_freezer_trap`;
+foregrounding the existing app let the same evaluation finish. This helper detects those states and foregrounds the existing
 app; it does not restart tests merely because an observation takes a long time. Logs retain
 skips separately from passes. It does not change system power settings or prove background
 reliability on ColorOS/HyperOS; manufacturer background and resource acceptance remain separate.
@@ -150,3 +174,63 @@ verifies persisted corrections/settings and original bytes, and cleans up the ex
 Use `-Phase Cleanup` after a failed run when the device is accessible. Logs distinguish no observed
 advancement from success. An unlock or manufacturer background setting may be needed; this does
 not promise unattended timing, battery life or recovery while credential storage is locked.
+
+## Controlled resource constraints
+
+With matching validation app/test APKs on an authorized USB-charging Android 10+ phone, the opt-in resource
+helper tests the real production scheduler and worker, using one owned public-domain image:
+
+```powershell
+.\tools\test-resource-constraints.ps1 -Adb "$env:ANDROID_HOME/platform-tools/adb.exe" -Serial YOUR_SERIAL -LogDirectory .ai/charging -Mode charging
+.\tools\test-resource-constraints.ps1 -Adb "$env:ANDROID_HOME/platform-tools/adb.exe" -Serial YOUR_SERIAL -LogDirectory .ai/thermal -Mode thermal
+# Also exercise the observed stale CHARGING status while no source is connected:
+.\tools\test-resource-constraints.ps1 -Adb "$env:ANDROID_HOME/platform-tools/adb.exe" -Serial YOUR_SERIAL -LogDirectory .ai/stale-charging -Mode charging -StaleChargingStatus
+```
+
+The helper refuses existing sensor overrides. Charging mode temporarily reports unplugged power
+and discharging status consistently (HyperOS can retain a charging status after debug unplug alone),
+requires an enqueued job and no hash progress for15 seconds, then restores physical battery
+reporting and requires real inference to complete. It also directly invokes the real worker
+against the controlled signal to check its independent guard. The worker independently checks power at
+boundaries because scheduler constraints and sensor signals can briefly disagree. Thermal mode temporarily overrides Android's
+thermal status to severe, directly executes the real production worker against PowerManager
+to require a retry without hash progress (JobScheduler may itself suppress a severe-thermal job), then
+restores physical thermal reporting and requires inference to finish. It does not heat the device.
+Both modes restore and verify physical reporting in `finally`, cancel only validation work and
+remove the exact test-created fixture. These controlled API/OS checks do not measure natural
+overheating, battery drain, low-storage behavior or unattended real-library throughput.
+The validation activity stays active with a temporary keep-screen-on flag during these resource
+checks. Unlock normally before running them; background/locked-phone scheduling is a separate check.
+
+The worker requires both a connected source and charging/full status from the sticky battery
+intent. Android's `BatteryManager.isCharging` can remain false while physically charging because
+its background-work signal is debounced; resource diagnostics record that signal separately.
+No charging debounce or manufacturer power policy is changed by these tests.
+
+## Modern media permission lifecycle
+
+On an unlocked Android 14+ phone with the matching validation APKs installed and that disposable
+installation denied shared-gallery access, run:
+
+```powershell
+.\tools\test-media-permissions.ps1 -Adb "$env:ANDROID_HOME/platform-tools/adb.exe" -Serial YOUR_SERIAL -LogDirectory .ai/media-permissions
+```
+
+This opt-in check uses the production access buttons and real system denial/full/selected dialogs.
+A test-only activity under a separate UID creates two licensed photos and one video in a unique
+fixture album. The target app does not own those rows, so owner access cannot masquerade as a
+permission grant. Selection chooses only that public album, then adds another item through Manage
+selection. Production reconciliation must reflect the selected membership and hide stale rows
+after revocation. Accessible originals are checked against their digests.
+Full access is verified by the system grant and exact fixture reads; no extra full-library scan
+is performed just to count fixtures. Ordinary indexing stays paused. No screenshots, private picker
+text, gallery names or media are exported. The helper revokes/clears prompt flags only for the
+fixed disposable validation package, deletes exact fixtures through their owner and resets only
+validation derived data in `finally`. The personal installation is never granted, revoked or reset.
+System picker UI varies by OS; a missing expected control fails the test rather than selecting
+arbitrary private media. This harness is skipped by the normal suite.
+If the system picker does not expose custom fixture albums, add `-ManualSelection`: select one
+new public fixture and confirm, then add a second fixture through the next picker. Each selection
+wait is bounded to six minutes; reconciliation rejects any selection outside the fixture album.
+The validation normal-suite and permission helpers opt into a bounded test-only screen hold,
+released at run completion or its timeout. This does not unlock keyguard or change system settings.

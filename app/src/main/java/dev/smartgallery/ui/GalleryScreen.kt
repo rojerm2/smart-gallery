@@ -779,7 +779,10 @@ private fun SettingsPanel(vm: GalleryViewModel, onBack: () -> Unit, onRequestAcc
         item {
             Text("Background work", fontWeight = FontWeight.SemiBold)
             Text(
-                "Android can defer scans. Paused work keeps checkpoints. Phone-specific background restrictions and target Redmi behavior still need device checks.",
+                if (Build.MANUFACTURER.equals("Xiaomi", ignoreCase = true))
+                    "Android and HyperOS can defer scans. Unlock the phone after restarting. If work stays queued, search phone Settings for Background autostart and review Smart Gallery's battery restrictions. You can reopen the app and use Scan now. Pausing keeps checkpoints; Android controls timing."
+                else
+                    "Android can defer scans. Unlock the phone after restarting. If work stays queued, review this app's background and battery settings, or reopen it and use Scan now. Pausing keeps checkpoints; Android controls timing.",
                 fontSize = 13.sp,
             )
         }

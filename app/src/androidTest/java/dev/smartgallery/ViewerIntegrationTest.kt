@@ -5,6 +5,11 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
+import android.view.View
+import android.view.ViewGroup
+import android.view.inspector.WindowInspector
+import androidx.media3.common.Player
+import androidx.media3.ui.PlayerView
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -14,7 +19,9 @@ import androidx.test.uiautomator.Until
 import dev.smartgallery.data.GalleryRepository
 import java.io.File
 import java.util.UUID
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.Assert.*
 import org.junit.Assume.assumeTrue
 import org.junit.Test
@@ -86,10 +93,11 @@ class ViewerIntegrationTest {
     }
 
     @Test
+    @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
     fun accessibleVideoOpensAndPlaysWithNativeControls() = runBlocking {
         withFixture(true) { name, _, _, _ ->
             val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
-            launchFresh().use {
+            launchFresh().use { scenario ->
                 assertTrue(device.wait(Until.hasObject(By.text("Smart Gallery")), 10_000))
                 val found = device.wait(Until.hasObject(By.descContains(name)), 15_000)
                 if (!found) {
@@ -107,10 +115,50 @@ class ViewerIntegrationTest {
                     )
                 }
                 assertTrue("Video fixture must be visible in Photos", found)
+                device.waitForIdle()
                 device.findObject(By.descContains(name)).click()
                 assertTrue(device.wait(Until.hasObject(By.desc("Play")), 10_000))
+                device.waitForIdle()
                 device.findObject(By.desc("Play")).click()
-                assertTrue(device.wait(Until.hasObject(By.desc("Pause")), 10_000))
+                fun playerView(view: View): PlayerView? {
+                    if (view is PlayerView) return view
+                    if (view is ViewGroup)
+                        for (index in 0 until view.childCount) {
+                            playerView(view.getChildAt(index))?.let {
+                                return it
+                            }
+                        }
+                    return null
+                }
+                // Native controls auto-hide. Observe actual playback after the real Play tap.
+                val advanced =
+                    withTimeoutOrNull(10_000) {
+                        while (true) {
+                            var playing = false
+                            scenario.onActivity { activity ->
+                                val player =
+                                    WindowInspector.getGlobalWindowViews()
+                                        .asSequence()
+                                        .mapNotNull(::playerView)
+                                        .firstOrNull()
+                                        ?.player
+                                playing =
+                                    player != null &&
+                                        player.currentPosition >= 500 &&
+                                        (player.isPlaying ||
+                                            player.playbackState == Player.STATE_ENDED)
+                            }
+                            if (playing) return@withTimeoutOrNull true
+                            delay(100)
+                        }
+                        @Suppress("UNREACHABLE_CODE") false
+                    } == true
+                if (!advanced) {
+                    val cache = InstrumentationRegistry.getInstrumentation().targetContext.cacheDir
+                    device.takeScreenshot(File(cache, "viewer-playback-failure.png"))
+                    device.dumpWindowHierarchy(File(cache, "viewer-playback-failure.xml"))
+                }
+                assertTrue("Native play control must advance actual video playback", advanced)
                 assertFalse(
                     device.hasObject(
                         By.text("This item is no longer accessible or could not be opened.")

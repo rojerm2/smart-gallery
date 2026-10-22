@@ -1,7 +1,10 @@
 package dev.smartgallery.analysis
 
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.net.Uri
+import android.os.BatteryManager
 import android.os.PowerManager
 import android.os.StatFs
 import android.os.SystemClock
@@ -96,6 +99,7 @@ constructor(
                     return isStopped ||
                         repo.settings.paused ||
                         repo.settings.generation != generation ||
+                        (repo.settings.chargingOnly && !hasChargingPower()) ||
                         StatFs(applicationContext.filesDir.path).availableBytes <
                             200L * 1024 * 1024 ||
                         (android.os.Build.VERSION.SDK_INT >= 29 &&
@@ -107,6 +111,13 @@ constructor(
                     if (dao.nextStage() == null) {
                         repo.settings.reason = "Up to date"
                         return@withContext Result.success()
+                    }
+                    // Scheduler constraints can lag a power/thermal transition on some devices.
+                    // Recheck before allocating inference resources as well as at checkpoints.
+                    if (shouldYield()) {
+                        repo.settings.reason = "Waiting for resources or resume"
+                        return@withContext if (repo.settings.paused) Result.success()
+                        else Result.retry()
                     }
                     VisionEngine(applicationContext).use { engine ->
                         while (SystemClock.elapsedRealtime() - start < 120_000) {
@@ -528,6 +539,19 @@ constructor(
             }
         }
         return digest.digest().joinToString("") { "%02x".format(it) }
+    }
+
+    private fun hasChargingPower(): Boolean {
+        // BatteryManager.isCharging uses a debounced BatteryStats signal on some devices.
+        // Match the battery status used by WorkManager, also requiring a connected source:
+        // an unplug transition can briefly retain CHARGING status on the tested HyperOS.
+        val signal =
+            applicationContext.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+                ?: return false
+        val status = signal.getIntExtra(BatteryManager.EXTRA_STATUS, -1)
+        return signal.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) != 0 &&
+            status in
+                setOf(BatteryManager.BATTERY_STATUS_CHARGING, BatteryManager.BATTERY_STATUS_FULL)
     }
 
     private fun isScreenshot(item: Media) =

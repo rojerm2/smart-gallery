@@ -23,9 +23,12 @@ class UiSmokeTest {
             assertTrue(device.wait(Until.hasObject(By.text("Smart Gallery")), 10_000))
             assertTrue(device.wait(Until.hasObject(By.text("Allow photos & videos")), 10_000))
             assertTrue(device.takeScreenshot(File(context.cacheDir, "gallery-denied-test.png")))
+            device.waitForIdle()
             device.findObject(By.text("People")).click()
+            device.waitForIdle()
             assertTrue(device.wait(Until.hasObject(By.text("Familiar faces")), 10_000))
             device.findObject(By.text("Review faces")).click()
+            device.waitForIdle()
             assertTrue(
                 device.wait(Until.hasObject(By.text("A little help, when you like")), 10_000)
             )

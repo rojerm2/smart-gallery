@@ -2,6 +2,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application>
         <activity
+            android:name="dev.smartgallery.PermissionFixtureActivity"
+            android:exported="true"
+            android:theme="@android:style/Theme.Material.Light.NoActionBar" />
+        <activity
             android:name="dev.smartgallery.ShareProbeActivity"
             android:exported="true"
             android:theme="@android:style/Theme.Material.Light.NoActionBar" />
