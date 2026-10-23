@@ -274,6 +274,11 @@ interface GalleryDao {
 
     @Query("DELETE FROM memberships WHERE manual=0") suspend fun clearAutomaticMemberships()
 
+    @Query(
+        "DELETE FROM memberships WHERE manual=0 AND faceId IN (SELECT id FROM faces WHERE mediaId=:mediaId)"
+    )
+    suspend fun clearAutomaticMembershipsForMedia(mediaId: String)
+
     @Upsert suspend fun negative(negative: Negative)
 
     @Query("SELECT * FROM negatives") suspend fun negatives(): List<Negative>

@@ -14,6 +14,7 @@ import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import dev.smartgallery.domain.DetectionPolicy
 import dev.smartgallery.domain.DocumentPolicy
 import dev.smartgallery.domain.QualityPolicy
+import dev.smartgallery.domain.SourceDetailPolicy
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.math.*
@@ -157,6 +158,10 @@ class VisionEngine(private val context: Context) : AutoCloseable {
         if (result.usable || result.reason == "Small portrait on a document") return result
         val bounds = result.key.split('-').mapNotNull { it.toIntOrNull() }
         if (bounds.size != 4) return result
+        val target = SourceDetailPolicy.region(result.key) ?: return result
+        var canvasWidth = 0
+        var canvasHeight = 0
+        var crop = Rect()
         val region =
             ImageDecoder.decodeBitmap(ImageDecoder.createSource(context.contentResolver, uri)) {
                 decoder,
@@ -176,15 +181,17 @@ class VisionEngine(private val context: Context) : AutoCloseable {
                         (y + fh * 3 / 2).coerceAtMost(h),
                     )
                 val scale = min(1.0, 640.0 / max(rect.width(), rect.height()))
-                decoder.setTargetSize(max(1, (w * scale).toInt()), max(1, (h * scale).toInt()))
-                decoder.setCrop(
+                canvasWidth = max(1, (w * scale).toInt())
+                canvasHeight = max(1, (h * scale).toInt())
+                decoder.setTargetSize(canvasWidth, canvasHeight)
+                crop =
                     Rect(
                         (rect.left * scale).toInt(),
                         (rect.top * scale).toInt(),
                         (rect.right * scale).toInt(),
                         (rect.bottom * scale).toInt(),
                     )
-                )
+                decoder.setCrop(crop)
                 decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
             }
         try {
@@ -196,19 +203,38 @@ class VisionEngine(private val context: Context) : AutoCloseable {
             )
                 return result
             val candidates = faces(region, false)
-            val best = candidates.maxByOrNull { it.quality }
-            candidates.filter { it !== best }.forEach { it.crop.recycle() }
-            if (best != null && best.usable) {
-                result.crop.recycle()
+            var retained: FaceResult? = null
+            try {
+                val mapped =
+                    candidates.map {
+                        SourceDetailPolicy.toSource(
+                            checkNotNull(SourceDetailPolicy.region(it.key)),
+                            DetectionPolicy.Region(
+                                crop.left.toFloat(),
+                                crop.top.toFloat(),
+                                crop.right.toFloat(),
+                                crop.bottom.toFloat(),
+                            ),
+                            canvasWidth,
+                            canvasHeight,
+                        )
+                    }
+                val index = SourceDetailPolicy.correspondingIndex(target, mapped) ?: return result
+                val matched = candidates[index]
+                if (!matched.usable) return result
                 val excluded = document && bounds[2] < 240
-                return best.copy(
-                    key = result.key,
-                    usable = !excluded,
-                    reason = if (excluded) "Small portrait on a document" else "",
-                )
+                val replacement =
+                    matched.copy(
+                        key = result.key,
+                        usable = !excluded,
+                        reason = if (excluded) "Small portrait on a document" else "",
+                    )
+                result.crop.recycle()
+                retained = matched
+                return replacement
+            } finally {
+                candidates.filter { it !== retained }.forEach { it.crop.recycle() }
             }
-            best?.crop?.recycle()
-            return result
         } finally {
             region.recycle()
         }

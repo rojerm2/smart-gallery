@@ -34,8 +34,17 @@ version changes when document/receipt rules change, so existing hashed media can
 while preserving explicit identity and category corrections.
 
 The source-detail repair keeps the existing natural-pixel quality threshold and embedding version.
-It requeues eligible failed photo-face stages once after updating; completed work, inaccessible or
-excluded media, content/video failures and manual corrections are preserved. Later failures keep
+Retries map crop detections through the actual rounded decoder geometry and require a unique
+spatial match to the original face. The public blurred-target/sharp-neighbor regression checks
+that quality cannot select another face from the expanded region; the natural-detail positive
+case still requires a real usable embedding. Pure geometry checks cover jitter and ambiguity.
+Photo face-stage upgrades requeue only obsolete stages, retaining completed hashes/content,
+compatible embeddings, manual memberships, exclusions, label decisions and negative constraints.
+Only unconfirmed memberships for requeued media are cleared for fresh grouping. Current video
+stages and current-stage retry/checkpoint state are preserved.
+The earlier input-size repair independently requeues eligible failed photo-face stages once;
+it preserves completed work, inaccessible/excluded media, content/video failures and corrections.
+Later failures keep
 the normal bounded retry policy. Native regressions cover both tiny excluded crops and successful
 real source-detail recovery, plus the one-time repair's eligibility and persistence behavior.
 

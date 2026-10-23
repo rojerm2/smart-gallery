@@ -2,6 +2,10 @@ package dev.smartgallery
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.Rect
 import android.net.Uri
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -17,6 +21,78 @@ import org.junit.runner.RunWith
 /** Public test-only sources in a private UUID file; never reads or writes the user's gallery. */
 @RunWith(AndroidJUnit4::class)
 class SourceDetailRetryTest {
+    @Test
+    fun blurryTargetCannotBorrowTheSharpNeighborInsideItsExpandedRegion() = runBlocking {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val context = instrumentation.targetContext
+        val scene = Bitmap.createBitmap(1200, 800, Bitmap.Config.ARGB_8888)
+        val file = File(context.cacheDir, "neighbors-${UUID.randomUUID()}.png")
+        var preview: FaceResult? = null
+        var retried: FaceResult? = null
+        try {
+            VisionEngine(context).use { engine ->
+                val source =
+                    instrumentation.context.assets.open("astronaut.png").use {
+                        BitmapFactory.decodeStream(it)
+                    }
+                val detected = engine.faces(source, false)
+                val bounds = detected.first { it.usable }.key.split('-').map { it.toInt() }
+                val face =
+                    Bitmap.createBitmap(
+                        source,
+                        bounds[0] * source.width / 1000,
+                        bounds[1] * source.height / 1000,
+                        bounds[2] * source.width / 1000,
+                        bounds[3] * source.height / 1000,
+                    )
+                val blurred = Bitmap.createScaledBitmap(face, 6, 6, true)
+                val canvas = Canvas(scene)
+                canvas.drawColor(Color.DKGRAY)
+                val paint = Paint(Paint.FILTER_BITMAP_FLAG)
+                canvas.drawBitmap(blurred, null, Rect(300, 200, 600, 560), paint)
+                canvas.drawBitmap(face, null, Rect(610, 280, 740, 440), paint)
+                detected.forEach { it.crop.recycle() }
+                source.recycle()
+                face.recycle()
+                blurred.recycle()
+                file.outputStream().use { scene.compress(Bitmap.CompressFormat.PNG, 100, it) }
+                // The target has no recoverable detail. A sharp real face is inside the
+                // expanded retry ROI, outside the target box. All inference remains real.
+                preview =
+                    FaceResult(
+                        "250-250-250-450",
+                        ByteArray(0),
+                        0.0,
+                        Bitmap.createBitmap(112, 112, Bitmap.Config.ARGB_8888),
+                        false,
+                        "Insufficient face detail, sharpness, pose or landmarks",
+                    )
+                val neighbors = engine.faces(scene, false)
+                try {
+                    assertTrue(
+                        "The fixture must contain a real usable neighbor",
+                        neighbors.any { it.usable && it.key.split('-')[0].toInt() > 490 },
+                    )
+                } finally {
+                    neighbors.forEach { it.crop.recycle() }
+                }
+                retried = engine.retrySourceDetail(Uri.fromFile(file), preview!!, false)
+                assertTrue(
+                    "An unrelated neighbor must not replace the excluded target",
+                    preview === retried,
+                )
+                assertFalse(retried!!.usable)
+                assertTrue(retried!!.embedding.isEmpty())
+                assertFalse(preview!!.crop.isRecycled)
+            }
+        } finally {
+            preview?.crop?.let { if (!it.isRecycled) it.recycle() }
+            retried?.crop?.let { if (!it.isRecycled) it.recycle() }
+            scene.recycle()
+            file.delete()
+        }
+    }
+
     private suspend fun source(check: suspend (Uri, ByteArray) -> Unit) {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val bytes = instrumentation.context.assets.open("astronaut.png").use { it.readBytes() }

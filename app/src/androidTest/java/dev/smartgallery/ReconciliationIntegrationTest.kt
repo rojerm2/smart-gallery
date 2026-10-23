@@ -109,7 +109,7 @@ class ReconciliationIntegrationTest {
             assertFalse(repo.dao.mediaById(outdated.id)!!.analyzed)
             assertEquals("pending", repo.dao.stageById(outdated.id, "1faces")!!.state)
             assertEquals(
-                dev.smartgallery.analysis.FaceEmbedder.VERSION,
+                GalleryRepository.PHOTO_FACE_STAGE_VERSION,
                 repo.dao.stageById(outdated.id, "1faces")!!.version,
             )
             context.contentResolver.update(

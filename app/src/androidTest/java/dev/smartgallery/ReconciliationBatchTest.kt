@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import androidx.room.Room
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import dev.smartgallery.analysis.FaceEmbedder
 import dev.smartgallery.data.*
 import java.io.File
 import java.util.UUID
@@ -49,6 +50,109 @@ class ReconciliationBatchTest {
             1,
             10,
         )
+
+    @Test
+    fun photoRetryUpgradeOnlyRequeuesFacesAndKeepsCorrectionsAndEmbeddingCompatibility() =
+        runBlocking {
+            isolated { repo ->
+                val photo = snapshot().copy(hash = "fixture-hash", analyzed = true)
+                repo.dao.media(photo)
+                val hash = Stage(photo.id, "0hash", "done")
+                val content =
+                    Stage(photo.id, "2content", "done", version = GalleryRepository.CONTENT_VERSION)
+                repo.dao.stage(hash)
+                repo.dao.stage(content)
+                repo.dao.stage(Stage(photo.id, "1faces", "done", version = FaceEmbedder.VERSION))
+                val face =
+                    Face(
+                        "confirmed",
+                        photo.id,
+                        photo.hash,
+                        0,
+                        byteArrayOf(1, 2, 3, 4),
+                        FaceEmbedder.VERSION,
+                        90.0,
+                        "fixture.jpg",
+                        location = "100-100-300-300",
+                        userIncluded = true,
+                    )
+                repo.dao.face(face)
+                repo.dao.face(face.copy(id = "automatic", userIncluded = false))
+                repo.dao.person(Person("person", "Confirmed fixture", true))
+                val membership =
+                    Membership(
+                        face.id,
+                        "person",
+                        manual = true,
+                        anchor = GalleryRepository.anchor(face),
+                    )
+                val negative = GalleryRepository.negative("a:${membership.anchor}", "p:other")
+                repo.dao.membership(membership)
+                repo.dao.membership(Membership("automatic", "person"))
+                repo.dao.negative(negative)
+                repo.label(photo.id, "Manual category", true)
+                val overrides = repo.dao.overrides(photo.id)
+                repo.reconcileAnalysisVersions(repo.settings.generation)
+                assertFalse(repo.dao.mediaById(photo.id)!!.analyzed)
+                assertEquals(photo.hash, repo.dao.mediaById(photo.id)!!.hash)
+                assertEquals(hash, repo.dao.stageById(photo.id, "0hash"))
+                assertEquals(content, repo.dao.stageById(photo.id, "2content"))
+                val pending = repo.dao.stageById(photo.id, "1faces")!!
+                assertEquals("pending", pending.state)
+                assertEquals(GalleryRepository.PHOTO_FACE_STAGE_VERSION, pending.version)
+                val savedFace = repo.dao.faceById(face.id)!!
+                assertEquals(FaceEmbedder.VERSION, savedFace.model)
+                assertArrayEquals(face.embedding, savedFace.embedding)
+                assertTrue(savedFace.userIncluded)
+                assertEquals(membership, repo.dao.membershipById(face.id))
+                assertNull(repo.dao.membershipById("automatic"))
+                assertEquals(listOf(negative), repo.dao.negatives())
+                assertEquals(overrides, repo.dao.overrides(photo.id))
+                // Repeated discovery cannot reset an attempt/checkpoint of the current stage.
+                val running = pending.copy(state = "running", attempts = 1, checkpoint = 3)
+                repo.dao.stage(running)
+                repo.reconcileAnalysisVersions(repo.settings.generation)
+                assertEquals(running, repo.dao.stageById(photo.id, "1faces"))
+            }
+        }
+
+    @Test
+    fun contentOnlyUpgradeLeavesPhotoFacesAndCurrentVideoWorkUntouched() = runBlocking {
+        isolated { repo ->
+            val photo = snapshot().copy(hash = "photo-hash", analyzed = true)
+            val video = photo.copy(id = "video", mime = "video/mp4", duration = 12000)
+            repo.dao.media(photo)
+            repo.dao.media(video)
+            val faces =
+                Stage(
+                    photo.id,
+                    "1faces",
+                    "done",
+                    version = GalleryRepository.PHOTO_FACE_STAGE_VERSION,
+                )
+            val videoStage =
+                Stage(
+                    video.id,
+                    "1video",
+                    "running",
+                    checkpoint = 27,
+                    version = GalleryRepository.videoVersion(true),
+                )
+            repo.dao.stage(faces)
+            repo.dao.stage(Stage(photo.id, "2content", "done", version = "older-content"))
+            repo.dao.stage(videoStage)
+            repo.reconcileAnalysisVersions(repo.settings.generation)
+            assertEquals(faces, repo.dao.stageById(photo.id, "1faces"))
+            assertEquals("pending", repo.dao.stageById(photo.id, "2content")!!.state)
+            assertEquals(
+                GalleryRepository.CONTENT_VERSION,
+                repo.dao.stageById(photo.id, "2content")!!.version,
+            )
+            assertEquals(videoStage, repo.dao.stageById(video.id, "1video"))
+            assertTrue(repo.dao.mediaById(video.id)!!.analyzed)
+            assertFalse(repo.dao.mediaById(photo.id)!!.analyzed)
+        }
+    }
 
     @Test
     fun oldDiscoverySnapshotCannotUndoNewFolderOrMediaExclusions() = runBlocking {

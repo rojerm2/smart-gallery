@@ -218,43 +218,58 @@ class GalleryRepository(
                         purgeDerived(id)
                     }
                 }
-                // Join stage versions in bounded pages. Unhashed items already have a hash
-                // stage; issuing two suspend queries per item can starve initial discovery.
-                fun outdated(video: Boolean, faces: String?, content: String?) =
-                    faces == null ||
-                        !faces.startsWith(FaceEmbedder.VERSION) ||
-                        (if (video)
-                            !faces.contains(CONTENT_VERSION) || !faces.contains(VideoPlan.VERSION)
-                        else content != CONTENT_VERSION)
-                var afterId = ""
-                while (true) {
-                    val versions = dao.analysisVersions(afterId)
-                    if (versions.isEmpty()) break
-                    afterId = versions.last().mediaId
-                    for (version in versions) {
-                        if (!outdated(version.video, version.faceVersion, version.contentVersion))
-                            continue
-                        gate.withLock {
-                            db.withTransaction {
-                                if (settings.generation != generation)
-                                    throw kotlinx.coroutines.CancellationException()
-                                val item = dao.mediaById(version.mediaId) ?: return@withTransaction
-                                if (!item.accessible || item.excluded || item.hash.isBlank())
-                                    return@withTransaction
-                                // Recheck a candidate under the gate so a concurrently completed
-                                // stage or an exclusion cannot be overwritten by a stale page.
-                                val faces =
-                                    dao.stageById(item.id, if (item.video) "1video" else "1faces")
-                                val content =
-                                    if (item.video) null else dao.stageById(item.id, "2content")
-                                if (outdated(item.video, faces?.version, content?.version))
-                                    enqueueAnalysis(item)
-                            }
+                reconcileAnalysisVersions(generation)
+            }
+        }
+
+    /** Upgrade only obsolete stages; keep compatible embeddings, hashes and explicit decisions. */
+    internal suspend fun reconcileAnalysisVersions(generation: Long) {
+        fun faceOutdated(video: Boolean, version: String?) =
+            if (video) version != videoVersion(false) && version != videoVersion(true)
+            else version != PHOTO_FACE_STAGE_VERSION
+        fun outdated(video: Boolean, faces: String?, content: String?) =
+            faceOutdated(video, faces) || (!video && content != CONTENT_VERSION)
+        // Bounded joined pages keep version checks from starving discovery/inference.
+        var afterId = ""
+        while (true) {
+            val versions = dao.analysisVersions(afterId)
+            if (versions.isEmpty()) break
+            afterId = versions.last().mediaId
+            for (version in versions) {
+                if (!outdated(version.video, version.faceVersion, version.contentVersion)) continue
+                gate.withLock {
+                    db.withTransaction {
+                        if (settings.generation != generation)
+                            throw kotlinx.coroutines.CancellationException()
+                        val item = dao.mediaById(version.mediaId) ?: return@withTransaction
+                        if (!item.accessible || item.excluded || item.hash.isBlank())
+                            return@withTransaction
+                        // Recheck inside the same gate as completion, exclusions and reset.
+                        val kind = if (item.video) "1video" else "1faces"
+                        val faces = dao.stageById(item.id, kind)
+                        val content = if (item.video) null else dao.stageById(item.id, "2content")
+                        if (faceOutdated(item.video, faces?.version)) {
+                            dao.clearAutomaticMembershipsForMedia(item.id)
+                            dao.stage(
+                                Stage(
+                                    item.id,
+                                    kind,
+                                    version =
+                                        if (item.video) videoVersion(settings.thorough)
+                                        else PHOTO_FACE_STAGE_VERSION,
+                                )
+                            )
+                            dao.analyzed(item.id, false)
+                        }
+                        if (!item.video && content?.version != CONTENT_VERSION) {
+                            dao.stage(Stage(item.id, "2content", version = CONTENT_VERSION))
+                            dao.analyzed(item.id, false)
                         }
                     }
                 }
             }
         }
+    }
 
     /** Retry eligible failed photo stages once after the source-detail input-size fix. */
     internal suspend fun recoverSourceDetailFailures(): Int =
@@ -349,7 +364,7 @@ class GalleryRepository(
         if (item.video)
             dao.stage(Stage(item.id, "1video", version = videoVersion(settings.thorough)))
         else {
-            dao.stage(Stage(item.id, "1faces", version = FaceEmbedder.VERSION))
+            dao.stage(Stage(item.id, "1faces", version = PHOTO_FACE_STAGE_VERSION))
             dao.stage(Stage(item.id, "2content", version = CONTENT_VERSION))
         }
     }
@@ -961,6 +976,9 @@ class GalleryRepository(
             )
 
         const val CONTENT_VERSION = "mlkit-label17.0.9-ocr16.0.1-rules2"
+        // The neural embedding space is unchanged; only photo retry correspondence changed.
+        const val PHOTO_FACE_STAGE_VERSION =
+            FaceEmbedder.VERSION + "|source-detail-correspondence-v2"
 
         fun videoVersion(thorough: Boolean) =
             FaceEmbedder.VERSION +

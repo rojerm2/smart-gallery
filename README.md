@@ -127,6 +127,10 @@ than packaging them in an installed APK; APK assets can be read by other apps.
   unconfirmed groups, including fragments from the earlier 50-face cap, and preserves corrections.
 - Byte-identical copies are deduplicated for support. Visually similar/recompressed copies are
   not treated as exact duplicates. Originals are always independently browsable.
+- Source-detail retries require a unique detection at the original face's location. A clearer
+  neighboring face cannot supply a retry result. This update rechecks older photo face stages
+  once and rebuilds their unconfirmed memberships, retaining hashes, content results and manual
+  corrections. The recognition model and compatible embedding space are unchanged.
 - Background timing is controlled by Android and the manufacturer. No overnight completion-time,
   universal recognition accuracy or device battery claim is made.
 - On Redmi Note 14 4G (24117RN76G), Android 16 / HyperOS 3.0.302.0, bundled inference and
