@@ -227,6 +227,8 @@ helper tests the real production scheduler and worker, using one owned public-do
 .\tools\test-resource-constraints.ps1 -Adb "$env:ANDROID_HOME/platform-tools/adb.exe" -Serial YOUR_SERIAL -LogDirectory .ai/thermal -Mode thermal
 # Also exercise the observed stale CHARGING status while no source is connected:
 .\tools\test-resource-constraints.ps1 -Adb "$env:ANDROID_HOME/platform-tools/adb.exe" -Serial YOUR_SERIAL -LogDirectory .ai/stale-charging -Mode charging -StaleChargingStatus
+# Exercise the real OS low-storage constraint without filling the phone:
+.\tools\test-resource-constraints.ps1 -Adb "$env:ANDROID_HOME/platform-tools/adb.exe" -Serial YOUR_SERIAL -LogDirectory .ai/storage -Mode storage
 ```
 
 The helper refuses existing sensor overrides. Charging mode temporarily reports unplugged power
@@ -243,6 +245,14 @@ remove the exact test-created fixture. These controlled API/OS checks do not mea
 overheating, battery drain, low-storage behavior or unattended real-library throughput.
 The validation activity stays active with a temporary keep-screen-on flag during these resource
 checks. Unlock normally before running them; background/locked-phone scheduling is a separate check.
+
+Storage mode requires an initially unforced, normal storage monitor. It briefly forces Android's
+low-storage scheduling signal, observes an enqueued production request with no hash progress for
+15 seconds, then resets the monitor and requires actual queued inference and unchanged fixture
+bytes. The host restores the monitor in `finally` and verifies unforced normal reporting; it
+refuses to overwrite existing logs or an existing forced/low state. Only fixed state/byte counts
+are recorded, without volume identifiers. This does not fill storage, test natural out-of-space
+behavior or exercise the worker's separate 200 MiB `StatFs` free-space guard.
 
 The worker requires both a connected source and charging/full status from the sticky battery
 intent. Android's `BatteryManager.isCharging` can remain false while physically charging because

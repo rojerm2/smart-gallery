@@ -61,7 +61,7 @@ class ResourceConstraintTest {
             cleanup()
             return@runBlocking
         }
-        require(mode in setOf("charging", "thermal"))
+        require(mode in setOf("charging", "thermal", "storage"))
         requireFixtureOnlyGalleryAccess(context)
         check(!marker.exists())
         IndexScheduler.pause(context)
@@ -69,8 +69,15 @@ class ResourceConstraintTest {
         repo.reset()
         val battery = context.getSystemService(BatteryManager::class.java)
         val power = context.getSystemService(PowerManager::class.java)
-        if (mode == "charging") assertFalse(battery.isCharging)
-        else assertTrue(power.currentThermalStatus >= PowerManager.THERMAL_STATUS_SEVERE)
+        fun storageLow() =
+            context.registerReceiver(null, IntentFilter(Intent.ACTION_DEVICE_STORAGE_LOW)) != null
+        when (mode) {
+            "charging" -> assertFalse(battery.isCharging)
+            "thermal" ->
+                assertTrue(power.currentThermalStatus >= PowerManager.THERMAL_STATUS_SEVERE)
+            "storage" ->
+                assertTrue("Controlled OS low-storage signal must be present", storageLow())
+        }
         val bytes = instrumentation.context.assets.open("astronaut.png").use { it.readBytes() }
         val uri =
             context.contentResolver.insert(
@@ -103,22 +110,27 @@ class ResourceConstraintTest {
             repo.reconcile()
             val media = repo.dao.accessibleMedia().single { it.name == "resource-$run.png" }
             IndexScheduler.schedule(context)
-            if (mode == "charging") {
+            if (mode == "charging" || mode == "storage") {
                 // Exercise actual JobScheduler constraints, not WorkManager's test driver.
                 repeat(30) {
-                    assertFalse(battery.isCharging)
+                    if (mode == "charging") assertFalse(battery.isCharging)
+                    else assertTrue(storageLow())
                     assertTrue(repo.dao.mediaById(media.id)!!.hash.isEmpty())
                     assertEquals("pending", repo.dao.stageById(media.id, "0hash")!!.state)
                     delay(500)
                 }
                 val work = manager.getWorkInfosForUniqueWork(IndexScheduler.NOW).get()
                 assertTrue(work.any { it.state == WorkInfo.State.ENQUEUED })
-                // Verify the independent guard too, including host-controlled stale CHARGING
-                // status with no connected source. The real PowerManager/battery APIs are used.
-                val worker = TestListenableWorkerBuilder<IndexWorker>(context).build()
-                assertEquals(ListenableWorker.Result.retry(), worker.doWork())
-                assertEquals("Waiting for resources or resume", repo.settings.reason)
-                assertTrue(repo.dao.mediaById(media.id)!!.hash.isEmpty())
+                assertTrue(work.all { it.constraints.requiresStorageNotLow() })
+                if (mode == "charging") {
+                    // Independent power guard, including stale CHARGING without a source.
+                    val worker = TestListenableWorkerBuilder<IndexWorker>(context).build()
+                    assertEquals(ListenableWorker.Result.retry(), worker.doWork())
+                    assertEquals("Waiting for resources or resume", repo.settings.reason)
+                    assertTrue(repo.dao.mediaById(media.id)!!.hash.isEmpty())
+                }
+                // The storage override changes the OS scheduling signal, not actual free
+                // bytes. Do not claim that this exercises the separate StatFs worker guard.
             } else {
                 // Severe thermal policy can prevent JobScheduler from invoking a job at all.
                 // Also run the real worker against the real PowerManager signal to verify its
@@ -150,7 +162,7 @@ class ResourceConstraintTest {
                             Bundle().apply {
                                 putString(
                                     "stream",
-                                    "Resource observation: mode=$mode charging=${battery.isCharging} plugged=${signal?.getIntExtra(BatteryManager.EXTRA_PLUGGED, -1)} status=${signal?.getIntExtra(BatteryManager.EXTRA_STATUS, -1)} thermal=${power.currentThermalStatus} hashReady=${current.hash.isNotBlank()} work=${work.map { "${it.state}/${it.runAttemptCount}" }} reason=${repo.settings.reason}\n",
+                                    "Resource observation: mode=$mode charging=${battery.isCharging} plugged=${signal?.getIntExtra(BatteryManager.EXTRA_PLUGGED, -1)} status=${signal?.getIntExtra(BatteryManager.EXTRA_STATUS, -1)} thermal=${power.currentThermalStatus} storageLow=${storageLow()} hashReady=${current.hash.isNotBlank()} work=${work.map { "${it.state}/${it.runAttemptCount}" }} reason=${repo.settings.reason}\n",
                                 )
                             },
                         )
@@ -171,6 +183,7 @@ class ResourceConstraintTest {
                 )
             }
             assertTrue(power.currentThermalStatus < PowerManager.THERMAL_STATUS_SEVERE)
+            if (mode == "storage") assertFalse(storageLow())
             assertTrue(repo.dao.facesForMedia(media.id).any { it.active && it.usable })
             assertArrayEquals(
                 bytes,
