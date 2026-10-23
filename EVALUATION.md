@@ -235,6 +235,30 @@ not promise unattended timing, battery life or recovery while credential storage
 
 ## Controlled resource constraints
 
+For full thorough-mode completion, use the separate validation app and matching test APK:
+
+```powershell
+.\tools\test-long-video.ps1 -Adb "$env:ANDROID_HOME/platform-tools/adb.exe" -Serial YOUR_SERIAL -TestApk app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk -LogDirectory .ai/long-video
+```
+
+The opt-in harness remuxes the licensed public clip into an actual twenty-minute H.264 file,
+checks its real duration and 600-sample plan, and runs the production default repository and
+WorkManager scheduler. It does not invoke a test worker or inject time. A fifteen-minute native
+observation limit requires monotonic persisted checkpoints and complete analysis. It checks an
+appearance in the final tenth of the clip, one-media support counting, durable manual identity/
+category decisions, unchanged original bytes and repeated-enqueue idempotence.
+
+The activity requests a temporary screen hold and records actual interactive/keyguard states.
+Periodic observations report only checkpoints, fixed work states and sampled process PSS, file
+descriptor counts, thermal status and main-thread callback latency. These are measurements for
+one repeated public fixture, not natural battery life, broad codec coverage, frame-render timing
+or general library throughput. The host foregrounds the same live process only after observing
+vendor freezing; observation latency never triggers a restart.
+The validation installation must have shared-gallery permissions denied. Other owned validation
+rows are excluded only in its derived database for this test. Exact cleanup deletes the owned URI,
+removes temporary exclusions, clears validation derived data and restores processing preferences;
+an explicit cleanup phase is also run by the host. Personal data and permissions are untouched.
+
 With matching validation app/test APKs on an authorized USB-charging Android 10+ phone, the opt-in resource
 helper tests the real production scheduler and worker, using one owned public-domain image:
 
