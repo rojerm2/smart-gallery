@@ -25,6 +25,14 @@ the same UUID afterward. A malformed cohort is rejected without attaching parser
 that might expose its contents. The ordinary suite uses only a synthetic malformed-input
 regression and skips the opt-in reproduction.
 
+For content calibration, `PrivateEvaluationTest` also accepts
+`-e evaluationCategoryDiagnostics true`. It reports aggregate miss-reason bins for expected
+Document/Receipt positives: visual-paper evidence, substantial text, capped amount counts and
+legacy keyword counts. It never reports OCR text, source indices, names or identifiers. These
+diagnostics are for calibration; freeze rules before opening held-out fixtures. The content
+version changes when document/receipt rules change, so existing hashed media can be reanalyzed
+while preserving explicit identity and category corrections.
+
 The source-detail repair keeps the existing natural-pixel quality threshold and embedding version.
 It requeues eligible failed photo-face stages once after updating; completed work, inaccessible or
 excluded media, content/video failures and manual corrections are preserved. Later failures keep
@@ -154,6 +162,13 @@ The host explicitly starts recovery work. This check does not prove automatic Wo
 rescheduling, reboot recovery, charging constraints, airplane-first-launch behavior or Redmi/HyperOS
 acceptance. It does not grant gallery permissions, reset existing app data or use private media.
 
+The process-kill harness drives an isolated fixture database through persisted bounded slices
+before requesting interruption; a successful slice is not assumed to mean an empty queue. It
+keeps the ordinary validation repository paused and restores that preference during exact cleanup.
+Add `-YieldFirstSlice` to `test-process-recovery.ps1` to inject an expired initial worker time
+budget before real inference continues. The subsequent checkpoint, SIGKILL and new-process
+recovery are real. This checks slice continuation; it does not measure natural timeouts or OS timing.
+
 ## Normal device suite and observed OPPO freezing
 
 If the personal installation has gallery access, build a separate installation for fixture tests:
@@ -216,6 +231,7 @@ verifies persisted corrections/settings and original bytes, and cleans up the ex
 Use `-Phase Cleanup` after a failed run when the device is accessible. Logs distinguish no observed
 advancement from success. An unlock or manufacturer background setting may be needed; this does
 not promise unattended timing, battery life or recovery while credential storage is locked.
+
 
 ## Controlled resource constraints
 

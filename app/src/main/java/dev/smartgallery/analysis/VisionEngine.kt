@@ -223,7 +223,8 @@ class VisionEngine(private val context: Context) : AutoCloseable {
 
     companion object {
         /**
-         * Conservative visual evidence: a large connected pale rectangular region inside a border.
+         * Visual evidence: a large, mostly filled neutral paper region. Allow normal shadows, warm
+         * lighting and tightly cropped scans; photographed paper is rarely pure white.
          */
         fun hasPaperRegion(bitmap: Bitmap): Boolean {
             val n = 64
@@ -233,7 +234,7 @@ class VisionEngine(private val context: Context) : AutoCloseable {
                 val r = p shr 16 and 255
                 val g = p shr 8 and 255
                 val b = p and 255
-                pale[y * n + x] = minOf(r, g, b) > 235 && maxOf(r, g, b) - minOf(r, g, b) < 35
+                pale[y * n + x] = minOf(r, g, b) > 150 && maxOf(r, g, b) - minOf(r, g, b) < 65
             }
             val seen = BooleanArray(n * n)
             val queue = IntArray(n * n)
@@ -276,7 +277,7 @@ class VisionEngine(private val context: Context) : AutoCloseable {
                         tail > w * h * .65 &&
                         w > n * .4 &&
                         h > n * .4 &&
-                        insetEdges >= 2
+                        (insetEdges >= 2 || tail > n * n * .65)
                 )
                     return true
             }

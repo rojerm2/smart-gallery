@@ -113,13 +113,20 @@ object DocumentPolicy {
         val substantial = lineCount >= 4 && text.count { it.isLetterOrDigit() } >= 35
         if (visual && substantial) {
             out += "Document"
-            val money = Regex("(?:php|usd|₱|\\$)\\s*\\d|\\d+[.,]\\d{2}").containsMatchIn(t)
-            if (
-                !screenshot &&
-                    money &&
-                    listOf("total", "subtotal", "cash", "tax", "receipt").count { it in t } >= 3
-            )
-                out += "Receipt"
+            // Require multiple printed amounts. Dotted dates must not count as prices.
+            val amounts =
+                Regex(
+                        "(?<![\\d.,])\\d+(?:[.,]\\d{3})*[.,]\\d{2}(?![\\d.,])|(?:php|usd|₱|\\$)\\s*\\d+(?![\\d.,])"
+                    )
+                    .findAll(t)
+                    .count()
+            val receiptWords =
+                Regex("\\b(?:total|subtotal|cash|tax|receipt)\\b")
+                    .findAll(t)
+                    .map { it.value }
+                    .toSet()
+            val total = Regex("\\btotal\\b|\\b(?:balance|amount)\\s+due\\b").containsMatchIn(t)
+            if (!screenshot && amounts >= 2 && total && receiptWords.size >= 2) out += "Receipt"
             if (
                 !screenshot &&
                     listOf(

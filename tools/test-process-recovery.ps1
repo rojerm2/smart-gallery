@@ -3,7 +3,8 @@ param(
     [Parameter(Mandatory=$true)][ValidatePattern('^[A-Za-z0-9._:-]+$')][string]$Serial,
     [Parameter(Mandatory=$true)][string]$TestApk,
     [Parameter(Mandatory=$true)][string]$LogDirectory,
-    [ValidateSet('dev.smartgallery','dev.smartgallery.validation')][string]$Package = 'dev.smartgallery'
+    [ValidateSet('dev.smartgallery','dev.smartgallery.validation')][string]$Package = 'dev.smartgallery',
+    [switch]$YieldFirstSlice
 )
 $ErrorActionPreference = 'Stop'
 $adbPath = (Resolve-Path -LiteralPath $Adb).Path
@@ -21,7 +22,10 @@ $prepareLog = Join-Path $logRoot 'prepare.txt'
 $prepareError = Join-Path $logRoot 'prepare-stderr.txt'
 $prepareProcess = $null
 try {
-    $prepareProcess = Start-Process -FilePath $adbPath -WindowStyle Hidden -PassThru -ArgumentList @('-s',$Serial,'shell','am','instrument','-w','-r','-e','class',$testClass,'-e','recoveryRun',$run,'-e','recoveryPhase','prepare',$runner) -RedirectStandardOutput $prepareLog -RedirectStandardError $prepareError
+    $prepareArguments = @('-s',$Serial,'shell','am','instrument','-w','-r','-e','class',$testClass,'-e','recoveryRun',$run,'-e','recoveryPhase','prepare')
+    if ($YieldFirstSlice) { $prepareArguments += @('-e','recoveryYieldFirstSlice','true') }
+    $prepareArguments += $runner
+    $prepareProcess = Start-Process -FilePath $adbPath -WindowStyle Hidden -PassThru -ArgumentList $prepareArguments -RedirectStandardOutput $prepareLog -RedirectStandardError $prepareError
     $deadline = [DateTime]::UtcNow.AddSeconds(100)
     $ready = $null
     while ([DateTime]::UtcNow -lt $deadline) {

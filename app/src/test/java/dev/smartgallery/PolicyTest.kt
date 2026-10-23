@@ -207,6 +207,23 @@ class PolicyTest {
     }
 
     @Test
+    fun commonTotalAndTaxReceiptNeedsSeveralAmountsAndWholeKeywords() {
+        val text = "CAFE EXAMPLE\nCOFFEE 8.00\nTOTAL 9.00\nTAX 1.00\nTHANK YOU"
+        assertTrue("Receipt" in DocumentPolicy.classify(setOf("Paper"), text, false, 5))
+        assertFalse("Receipt" in DocumentPolicy.classify(setOf("Paper"), text, true, 5))
+        assertTrue(DocumentPolicy.classify(setOf("Outdoor"), text, false, 5).isEmpty())
+        val prose =
+            "A totalitarian taxation story\nCashless receiptless travel\n2026.01.02\nUSD 9\nNotes for tomorrow"
+        assertFalse("Receipt" in DocumentPolicy.classify(setOf("Paper"), prose, false, 5))
+        val dates =
+            "TOTAL ECLIPSE STUDY\nTAX RESEARCH NOTES\n2026.01.02\n2026.02.03\nNo financial transaction"
+        assertFalse("Receipt" in DocumentPolicy.classify(setOf("Paper"), dates, false, 5))
+        val oneAmount =
+            "RECEIPT NOTES\nTOTAL USD 12\nCASH PAYMENT EXPECTED\nTAX INFORMATION TO FOLLOW"
+        assertFalse("Receipt" in DocumentPolicy.classify(setOf("Paper"), oneAmount, false, 4))
+    }
+
+    @Test
     fun combinedSearchPreservesQuotedPhrasesAndLiteralWildcards() {
         assertEquals(
             listOf("alice", "2026-10", "total php", "50%"),

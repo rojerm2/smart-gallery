@@ -960,7 +960,7 @@ class GalleryRepository(
                 value.optString("anchor", ""),
             )
 
-        const val CONTENT_VERSION = "mlkit-label17.0.9-ocr16.0.1-rules1"
+        const val CONTENT_VERSION = "mlkit-label17.0.9-ocr16.0.1-rules2"
 
         fun videoVersion(thorough: Boolean) =
             FaceEmbedder.VERSION +

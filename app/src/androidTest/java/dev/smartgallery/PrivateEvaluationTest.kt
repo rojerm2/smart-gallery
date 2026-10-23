@@ -100,6 +100,10 @@ class PrivateEvaluationTest {
         var peakPss = 0L
         val category =
             mutableMapOf<String, IntArray>() // TP, FP, FN, TN on explicitly labeled examples.
+        val categoryDiagnostics =
+            InstrumentationRegistry.getArguments().getString("evaluationCategoryDiagnostics") ==
+                "true"
+        val categoryMissReasons = mutableMapOf<String, Int>()
         val start = SystemClock.elapsedRealtime()
         VisionEngine(instrumentation.targetContext).use { engine ->
             for (i in 0 until items.length()) {
@@ -189,6 +193,39 @@ class PrivateEvaluationTest {
                         faces.count { it.usable },
                     )
                 val labels = result.labels.map { it.first }.toSet()
+                if (categoryDiagnostics) {
+                    val text = result.text.lowercase()
+                    val paper = VisionEngine.hasPaperRegion(bitmap)
+                    val visual =
+                        paper ||
+                            labels.any {
+                                it.lowercase() in
+                                    setOf(
+                                        "paper",
+                                        "document",
+                                        "receipt",
+                                        "identity document",
+                                        "font",
+                                        "handwriting",
+                                    )
+                            }
+                    val substantial =
+                        text.lines().size >= 4 && text.count { it.isLetterOrDigit() } >= 35
+                    val money =
+                        Regex("(?:php|usd|₱|\\$)\\s*\\d|\\d+[.,]\\d{2}")
+                            .findAll(text)
+                            .count()
+                            .coerceAtMost(3)
+                    val words =
+                        listOf("total", "subtotal", "cash", "tax", "receipt").count { it in text }
+                    for (label in strings(item.optJSONArray("labelsPresent"))) {
+                        if (label in setOf("Document", "Receipt") && label !in labels) {
+                            val bin =
+                                "$label/visual=$visual/paper=$paper/substantial=$substantial/moneyCapped3=$money/legacyWords=$words"
+                            categoryMissReasons[bin] = (categoryMissReasons[bin] ?: 0) + 1
+                        }
+                    }
+                }
                 for (label in strings(item.optJSONArray("labelsPresent"))) {
                     val c = category.getOrPut(label) { IntArray(4) }
                     if (label in labels) c[0]++ else c[2]++
@@ -293,6 +330,10 @@ class PrivateEvaluationTest {
                 "Category $label TP=${c[0]} FP=${c[1]} FN=${c[2]} TN=${c[3]} precision=${ratio(c[0],c[0]+c[1])} recall=${ratio(c[0],c[0]+c[2])}\n"
             )
         }
+        if (categoryDiagnostics)
+            output.append(
+                "Category miss evidence bins=$categoryMissReasons; counts only, no text or source identifiers.\n"
+            )
         output.append(
             "Model/config=${dev.smartgallery.analysis.FaceEmbedder.VERSION}/${IdentityPolicy.CONFIG}. Count coverage lacks IoU annotations; no universal reliability claim.\n"
         )

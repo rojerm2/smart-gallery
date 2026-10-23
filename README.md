@@ -115,6 +115,10 @@ than packaging them in an installed APK; APK assets can be read by other apps.
   age changes, masks, profiles, mirrors, posters and collages need representative evaluation.
 - OCR is Latin script. Document categories are broad organization, not authenticity checks or
   guaranteed extraction; screenshots cannot automatically become receipts or IDs through text alone.
+  Receipt/ID rules use English financial and identity terms; other languages and difficult layouts
+  can remain unclassified. Photographed paper supports ordinary shadows and warm lighting. Receipt
+  heuristic rules require multiple amounts, a total and distinct whole financial terms, alongside
+  visual evidence. The bundled model also supplies its own visual labels.
 - Normal videos use at most 120 evenly distributed samples (about ten-second spacing for short
   clips); thorough mode uses at most 600 (about two-second spacing). Sampling can miss brief faces.
   MediaCodec decodes actual frame timestamps; results do not imply frame-perfect appearance intervals.

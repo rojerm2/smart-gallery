@@ -11,6 +11,7 @@ import android.media.MediaMuxer
 import android.net.Uri
 import android.os.Build
 import android.os.Process
+import android.os.SystemClock
 import android.provider.MediaStore
 import android.util.AtomicFile
 import androidx.room.Room
@@ -24,6 +25,7 @@ import dev.smartgallery.analysis.IndexWorker
 import dev.smartgallery.analysis.VideoFrameReader
 import dev.smartgallery.data.GalleryDatabase
 import dev.smartgallery.data.GalleryRepository
+import dev.smartgallery.data.GallerySettings
 import dev.smartgallery.domain.VideoPlan
 import java.io.File
 import java.nio.ByteBuffer
@@ -55,7 +57,11 @@ class ProcessRecoveryTest {
             super.getSharedPreferences("$key-$name", mode)
     }
 
-    private fun worker(context: Context, repo: GalleryRepository) =
+    private fun worker(
+        context: Context,
+        repo: GalleryRepository,
+        clock: () -> Long = SystemClock::elapsedRealtime,
+    ) =
         TestListenableWorkerBuilder<IndexWorker>(context)
             .setWorkerFactory(
                 object : WorkerFactory() {
@@ -64,7 +70,8 @@ class ProcessRecoveryTest {
                         name: String,
                         params: WorkerParameters,
                     ): ListenableWorker? =
-                        if (name == IndexWorker::class.java.name) IndexWorker(context, params, repo)
+                        if (name == IndexWorker::class.java.name)
+                            IndexWorker(context, params, repo, clock)
                         else null
                 }
             )
@@ -106,6 +113,7 @@ class ProcessRecoveryTest {
 
     private suspend fun prepare(context: FixtureContext, repo: GalleryRepository): Unit =
         coroutineScope {
+            val preparationScope = this
             check(!File(context.root, "state.json").exists()) { "Use a fresh recovery run UUID" }
             // Repeat compressed packets from the existing licensed fixture. No new model/test asset
             // is
@@ -123,8 +131,16 @@ class ProcessRecoveryTest {
                         put(MediaStore.Video.VideoColumns.DURATION, duration)
                     },
                 )!!
-            val state = JSONObject().put("uri", uri.toString()).put("pid", Process.myPid())
+            val baseSettings = GallerySettings(context.baseContext)
+            val state =
+                JSONObject()
+                    .put("uri", uri.toString())
+                    .put("pid", Process.myPid())
+                    .put("basePaused", baseSettings.paused)
             writeJson(File(context.root, "state.json"), state)
+            // Fixture-context continuations use the process WorkManager singleton. Keep its
+            // ordinary repository paused; this harness explicitly drives the isolated DB.
+            baseSettings.paused = true
             context.contentResolver.openOutputStream(uri)!!.use { out ->
                 video.inputStream().use { it.copyTo(out) }
             }
@@ -149,7 +165,18 @@ class ProcessRecoveryTest {
                 }
             state.put("mediaId", media.id).put("planned", planned)
             writeJson(File(context.root, "state.json"), state)
-            val job = async(Dispatchers.IO) { worker(context, repo).doWork() }
+            val yieldFirst =
+                InstrumentationRegistry.getArguments().getString("recoveryYieldFirstSlice") ==
+                    "true"
+            var clockReads = 0
+            val initialClock: () -> Long =
+                if (yieldFirst) ({ if (clockReads++ == 0) 0L else 120_001L })
+                else SystemClock::elapsedRealtime
+            var job =
+                preparationScope.async(Dispatchers.IO) {
+                    worker(context, repo, initialClock).doWork()
+                }
+            var slices = 1
             try {
                 withTimeout(90_000) {
                     while (true) {
@@ -173,12 +200,60 @@ class ProcessRecoveryTest {
                                 .put("checkpoint", current.checkpoint)
                                 .put("faceId", face.id)
                                 .put("personId", repo.dao.membershipById(face.id)!!.personId)
+                                .put("prepareSlices", slices)
+                                .put("simulatedFirstSliceDeadline", yieldFirst)
                             writeJson(File(context.root, "state.json"), state)
                             writeJson(File(context.root, "ready.json"), state)
                             break
                         }
-                        check(job.isActive) {
-                            "Worker finished before an interruptible checkpoint: ${job.await()}"
+                        if (!job.isActive) {
+                            val result = job.await()
+                            val current = repo.dao.stageById(media.id, "1video")
+                            val item = repo.dao.mediaById(media.id)
+                            val faces = repo.dao.facesForMedia(media.id)
+                            val diagnostic =
+                                "Worker finished before an interruptible checkpoint: $result; " +
+                                    "stage=${current?.state}/${current?.checkpoint}/${current?.attempts}; " +
+                                    "planned=${state.getInt("planned")}; " +
+                                    "faces=${faces.size}/${faces.count { it.active && it.usable }}; " +
+                                    "media=${item?.accessible}/${item?.excluded}/${item?.analyzed}; " +
+                                    "hashReady=${item?.hash?.isNotBlank()}; reason=${repo.settings.reason}"
+                            check(
+                                result == ListenableWorker.Result.success() ||
+                                    result == ListenableWorker.Result.retry()
+                            ) {
+                                diagnostic
+                            }
+                            check(
+                                item?.accessible == true &&
+                                    !item.analyzed &&
+                                    current?.state !in setOf("done", "failed") &&
+                                    repo.dao.nextStage() != null &&
+                                    slices < 5
+                            ) {
+                                diagnostic
+                            }
+                            if (yieldFirst && slices == 1) {
+                                assertEquals("Queued to continue", repo.settings.reason)
+                                assertTrue(item.hash.isBlank())
+                            }
+                            InstrumentationRegistry.getInstrumentation()
+                                .sendStatus(
+                                    2,
+                                    android.os.Bundle().apply {
+                                        putString(
+                                            "stream",
+                                            "Recovery preparation continues persisted slice: ended=$slices checkpoint=${current?.checkpoint ?: 0} attempts=${current?.attempts ?: 0} reason=${repo.settings.reason}; simulatedInitialDeadline=${yieldFirst && slices == 1}\n",
+                                        )
+                                    },
+                                )
+                            // Success can mean a bounded slice or item retry, not queue completion.
+                            delay(10_000)
+                            slices++
+                            job =
+                                preparationScope.async(Dispatchers.IO) {
+                                    worker(context, repo).doWork()
+                                }
                         }
                         delay(30)
                     }
@@ -255,7 +330,7 @@ class ProcessRecoveryTest {
                 android.os.Bundle().apply {
                     putString(
                         "stream",
-                        "Actual process recovery: checkpoint ${before.checkpoint}/${state.getInt("planned")} resumed to ${completed.checkpoint}; manual identity/category preserved; original unchanged.\n",
+                        "Actual process recovery: checkpoint ${before.checkpoint}/${state.getInt("planned")} resumed to ${completed.checkpoint}; manual identity/category preserved; original unchanged; prepareSlices=${state.optInt("prepareSlices", 1)} simulatedInitialDeadline=${state.optBoolean("simulatedFirstSliceDeadline", false)}.\n",
                     )
                 },
             )
@@ -264,9 +339,12 @@ class ProcessRecoveryTest {
     private fun cleanup(context: FixtureContext) {
         val file = File(context.root, "state.json")
         if (file.exists()) {
-            val uri = Uri.parse(readJson(file).getString("uri"))
+            val state = readJson(file)
+            val uri = Uri.parse(state.getString("uri"))
             // Only the exact URI inserted by this run; never query/delete user gallery items.
             context.contentResolver.delete(uri, null, null)
+            if (state.has("basePaused"))
+                GallerySettings(context.baseContext).paused = state.getBoolean("basePaused")
         }
         context.root.deleteRecursively()
         context.deleteSharedPreferences("${context.key}-settings")

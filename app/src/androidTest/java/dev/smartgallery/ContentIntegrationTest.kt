@@ -29,7 +29,9 @@ class ContentIntegrationTest {
                     "Actual supported label expected on CC0 fixture: $expected, got $labels",
                     labels.any { it in expected },
                 )
-                assertFalse(result.labels.any { it.first in setOf("Receipt", "ID / document") })
+                assertFalse(
+                    result.labels.any { it.first in setOf("Document", "Receipt", "ID / document") }
+                )
                 bitmap.recycle()
             }
         }
@@ -98,11 +100,73 @@ class ContentIntegrationTest {
         letter.recycle()
     }
 
-    private fun sheet(lines: List<String>) =
+    @Test
+    fun dimWarmPaperSupportsRealOcrAndCommonReceiptLayout() = runBlocking {
+        val bitmap =
+            sheet(
+                listOf("EXAMPLE CAFE", "COFFEE 8.00", "TOTAL 9.00", "TAX 1.00", "THANK YOU"),
+                Color.rgb(210, 195, 175),
+                Color.rgb(95, 90, 85),
+            )
+        try {
+            assertTrue(
+                "Dim photographed paper still provides visual evidence",
+                VisionEngine.hasPaperRegion(bitmap),
+            )
+            VisionEngine(InstrumentationRegistry.getInstrumentation().targetContext).use { engine ->
+                val labels = engine.content(bitmap, false).labels.map { it.first }.toSet()
+                assertTrue("Document" in labels)
+                assertTrue("Receipt" in labels)
+                assertFalse("ID / document" in labels)
+            }
+        } finally {
+            bitmap.recycle()
+        }
+    }
+
+    @Test
+    fun tightlyCroppedPaperSupportsIdsButScreenshotMetadataStillExcludesThem() = runBlocking {
+        val paper = Color.rgb(210, 200, 185)
+        val bitmap =
+            sheet(
+                listOf(
+                    "SPECIMEN IDENTITY CARD",
+                    "REPUBLIC OF EXAMPLE",
+                    "DATE OF BIRTH 2000-01-01",
+                    "NATIONALITY EXAMPLE",
+                    "NOT A REAL DOCUMENT",
+                ),
+                paper,
+                paper,
+            )
+        try {
+            assertTrue(
+                "A scan need not have an external desk border",
+                VisionEngine.hasPaperRegion(bitmap),
+            )
+            VisionEngine(InstrumentationRegistry.getInstrumentation().targetContext).use { engine ->
+                val document = engine.content(bitmap, false).labels.map { it.first }.toSet()
+                assertTrue("Document" in document)
+                assertTrue("ID / document" in document)
+                val screenshot = engine.content(bitmap, true).labels.map { it.first }.toSet()
+                assertTrue("Screenshot" in screenshot)
+                assertFalse("ID / document" in screenshot)
+                assertFalse("Receipt" in screenshot)
+            }
+        } finally {
+            bitmap.recycle()
+        }
+    }
+
+    private fun sheet(
+        lines: List<String>,
+        paperColor: Int = Color.WHITE,
+        backgroundColor: Int = Color.rgb(220, 218, 210),
+    ) =
         Bitmap.createBitmap(1200, 1100, Bitmap.Config.ARGB_8888).also { bitmap ->
             Canvas(bitmap).apply {
-                drawColor(Color.rgb(220, 218, 210))
-                val white = Paint().apply { color = Color.WHITE }
+                drawColor(backgroundColor)
+                val white = Paint().apply { color = paperColor }
                 drawRect(40f, 40f, 1160f, 1060f, white)
                 val text =
                     Paint(Paint.ANTI_ALIAS_FLAG).apply {
